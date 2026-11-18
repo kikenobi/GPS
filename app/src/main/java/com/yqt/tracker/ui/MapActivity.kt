@@ -199,7 +199,11 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 updateDeviceMarkers()
                 val total = states.size
                 val withPos = states.values.count { it.position != null }
-                setStatus(getString(R.string.devices_count, withPos, total) + " · " + getString(R.string.updated_at, timeFmt.format(Date())))
+                val base = getString(R.string.devices_count, withPos, total) + " · " + getString(R.string.updated_at, timeFmt.format(Date()))
+                val errs = states.values.mapNotNull { st ->
+                    st.error?.takeIf { it.isNotBlank() }?.let { "${st.info.name}: $it" }
+                }.distinct()
+                setStatus(if (errs.isEmpty()) base else base + " · " + errs.joinToString(" | "))
                 maybeAutoSelect()
                 if (following) maybeRerouteForTargetMove()
             }.onFailure { e ->

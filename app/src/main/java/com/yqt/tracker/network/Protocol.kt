@@ -109,15 +109,29 @@ object Protocol {
     fun didOrder(value: String?): List<String> = parseDidMapping(value).keys.toList()
 
     fun buildWatchIndex(payload: JSONObject, userId: Int? = null): Map<String, MutableMap<String, Any?>> {
-        val didNames = parseDidMapping(payload.optString("didstr", null))
-        val didRoles = parseDidMapping(payload.optString("didrole", null))
-        val didTypes = parseDidMapping(payload.optString("didtype", null))
-        val didEsim = parseDidMapping(payload.optString("isEsim", null))
-        val didIds = parseDidMapping(payload.optString("total_did_id", null))
-        val didModels = parseDidMapping(payload.optString("total_did_model", null))
-        val didConfigs = parseDidMapping(payload.optString("total_did_config", null))
+        fun metaValue(key: String): String {
+            val top = payload.optString(key, "")
+            if (top.isNotEmpty() && top != "null") return top
+            val data = payload.opt("data")
+            if (data is JSONArray && data.length() > 0) {
+                val row = data.optJSONObject(0)
+                if (row != null) {
+                    val v = row.optString(key, "")
+                    if (v.isNotEmpty() && v != "null") return v
+                }
+            }
+            return ""
+        }
 
-        val order = didOrder(payload.optString("didstr", null)).ifEmpty { didOrder(payload.optString("total_did_id", null)) }
+        val didNames = parseDidMapping(metaValue("didstr").ifEmpty { null })
+        val didRoles = parseDidMapping(metaValue("didrole").ifEmpty { null })
+        val didTypes = parseDidMapping(metaValue("didtype").ifEmpty { null })
+        val didEsim = parseDidMapping(metaValue("isEsim").ifEmpty { null })
+        val didIds = parseDidMapping(metaValue("total_did_id").ifEmpty { null })
+        val didModels = parseDidMapping(metaValue("total_did_model").ifEmpty { null })
+        val didConfigs = parseDidMapping(metaValue("total_did_config").ifEmpty { null })
+
+        val order = didOrder(metaValue("didstr").ifEmpty { null }).ifEmpty { didOrder(metaValue("total_did_id").ifEmpty { null }) }
         val out = linkedMapOf<String, MutableMap<String, Any?>>()
         for (did in order) {
             out[did] = mutableMapOf(

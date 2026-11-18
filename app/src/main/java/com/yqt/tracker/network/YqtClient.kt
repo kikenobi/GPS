@@ -70,34 +70,32 @@ class YqtClient(
 
     fun discoverDevices(): List<WatchInfo> {
         ensureLoggedIn()
-        // try to enrich
-        try {
-            val uid = userId
-            if (uid != null) {
+        val uid = userId
+        if (uid != null) {
+            // Prefer per-device rows (often include did_id/nickname)
+            try { listDevices(uid, account) } catch (_: Exception) {}
+            // Enrich from metadata mapping
+            try {
                 val meta = findDeviceListByUserId(uid, account)
                 cacheDeviceMetadata(meta)
+            } catch (_: Exception) {}
+            // Fallback if still empty
+            if (deviceIndex.isEmpty()) {
+                try { listDevices(uid, account) } catch (_: Exception) {}
             }
-        } catch (_: Exception) {
-        }
-        // fallback: try list endpoint
-        try {
-            val uid = userId
-            if (uid != null && deviceIndex.isEmpty()) {
-                listDevices(uid, account)
-            }
-        } catch (_: Exception) {
         }
         return deviceIndex.values.map { toWatchInfo(it) }
     }
 
     fun toWatchInfo(m: Map<String, Any?>): WatchInfo {
         val did = (m["did"] ?: "").toString()
-        val name = ((m["nickname"] ?: m["rolename"] ?: did).toString()).ifBlank { did }
+        val name = ((m["nickname"] ?: m["rolename"] ?: m["name"] ?: did).toString()).ifBlank { did }
+        val didId = (m["did_id"] ?: m["didId"] ?: "").toString()
         return WatchInfo(
             did = did,
-            didId = (m["did_id"] ?: "").toString(),
+            didId = didId,
             name = name,
-            model = (m["model"] ?: "").toString(),
+            model = (m["model"] ?: m["dev_model"] ?: "").toString(),
             config = (m["config"] ?: "").toString(),
         )
     }
@@ -207,8 +205,11 @@ class YqtClient(
             return didId
         }
         val dev = deviceIndex[did]
-        val cached = dev?.get("did_id")?.toString() ?: ""
-        if (cached.isNotBlank()) return cached
+        val cached = (dev?.get("did_id") ?: dev?.get("didId"))?.toString() ?: ""
+        if (cached.isNotBlank() && cached != "null") {
+            dev?.set("did_id", cached)
+            return cached
+        }
         throw YqtApiException(null, "Falta did_id para $did")
     }
 
