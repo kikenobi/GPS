@@ -179,6 +179,41 @@ class YqtClient(
         return resp
     }
 
+    fun sendOrder(sendurl: String): JSONObject {
+        ensureLoggedIn()
+        val sid = sessionId ?: throw YqtApiException(null, "No hay sesión; inicia sesión primero")
+        val path = sessionPath("/S10APP/v2_sendOrder")
+        val payload = Protocol.signedParams(
+            mapOf(
+                "sid" to sid,
+                "language" to Protocol.DEFAULT_LANGUAGE,
+                "sendurl" to sendurl,
+            )
+        )
+        val resp = requestJson("POST", path, data = payload)
+        ensureCommandSuccess(resp)
+        return resp
+    }
+
+    fun resolveDeviceModel(did: String, model: String = ""): String {
+        if (model.isNotBlank()) {
+            val dev = deviceIndex.getOrPut(did) { mutableMapOf("did" to did) }
+            dev["model"] = model
+            return model
+        }
+        val dev = deviceIndex[did]
+        val m = (dev?.get("model") ?: dev?.get("dev_model"))?.toString() ?: ""
+        if (m.isNotBlank() && m != "null") return m
+        val info = dev?.let { toWatchInfo(it) }
+        if (info != null && info.model.isNotBlank()) return info.model
+        throw YqtApiException(null, "Falta modelo para $did")
+    }
+
+    fun freshPosition(did: String, model: String = ""): JSONObject {
+        val m = resolveDeviceModel(did, model)
+        return sendOrder("test?dev_id=$did&com=D3&dev_model=$m")
+    }
+
     fun listDevices(uid: Int, loginname: String): JSONObject {
         val params = Protocol.signedParams(
             mapOf(
@@ -283,5 +318,17 @@ class YqtClient(
             val msg = payload.optString("message", payload.optString("msg", "respuesta inesperada"))
             throw YqtApiException(status, msg, payload)
         }
+    }
+
+    private fun ensureCommandSuccess(payload: JSONObject) {
+        val code = Protocol.coerceInt(payload.opt("code"))
+        if (code == 200) return
+        val status = Protocol.coerceInt(payload.opt("status"))
+        if (status != null) {
+            ensureSuccess(payload)
+            return
+        }
+        val msg = payload.optString("message", payload.optString("msg", "respuesta de comando desconocida"))
+        throw YqtApiException(code, msg, payload)
     }
 }

@@ -50,6 +50,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private var refreshJob: Job? = null
     private var routeJob: Job? = null
+    private var followJob: Job? = null
     private var following = false
     private var currentRoute: RouteInfo? = null
     private var routeTargetDid: String? = null
@@ -227,7 +228,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (routeTargetDid != did) {
             clearRoute()
         }
-        if (following) requestRoute(force = true)
+        if (following) {
+            requestRoute(force = true)
+            startFollowLoop()
+        }
     }
 
     private fun updateDeviceMarkers() {
@@ -357,13 +361,40 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.followButton.text = getString(R.string.stop_follow)
         binding.navInstructionText.visibility = View.VISIBLE
         requestRoute(force = true)
+        startFollowLoop()
     }
 
     private fun stopFollowing() {
         following = false
+        followJob?.cancel()
+        followJob = null
         binding.followButton.text = getString(R.string.follow)
         binding.navInstructionText.visibility = View.GONE
         binding.navInstructionText.text = ""
+    }
+
+    private fun startFollowLoop() {
+        followJob?.cancel()
+        val targetDid = selectedDid ?: return
+        followJob = lifecycleScope.launch {
+            while (isActive && following) {
+                val did = selectedDid
+                if (did != null) {
+                    val c = client
+                    if (c != null) {
+                        withContext(Dispatchers.IO) {
+                            try {
+                                c.freshPosition(did)
+                            } catch (_: Exception) {
+                                // ignore individual trigger errors; position refresh will surface issues if persistent
+                            }
+                        }
+                    }
+                    refreshOnce(force = true)
+                }
+                delay(3_000)
+            }
+        }
     }
 
     private fun clearRoute() {
@@ -529,6 +560,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     override fun onDestroy() {
         refreshJob?.cancel()
         routeJob?.cancel()
+        followJob?.cancel()
         try { (getSystemService(Context.LOCATION_SERVICE) as LocationManager).removeUpdates(this) } catch (_: Exception) {}
         tts?.stop(); tts?.shutdown()
         super.onDestroy()
