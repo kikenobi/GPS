@@ -34,8 +34,6 @@ import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import java.text.SimpleDateFormat
 import java.util.*
-import java.text.SimpleDateFormat
-import java.util.*
 import kotlin.math.max
 
 class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitListener {
