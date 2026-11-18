@@ -1,6 +1,9 @@
 package com.yqt.tracker.network
 
 import android.content.Context
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
 import org.bouncycastle.cert.X509CertificateHolder
@@ -40,6 +43,27 @@ object Transport {
 
     @Volatile private var httpClient: OkHttpClient? = null
     private val random = SecureRandom()
+    private val cookieStore = mutableListOf<Cookie>()
+    private val cookieJar = object : CookieJar {
+        override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+            synchronized(cookieStore) {
+                for (cookie in cookies) {
+                    cookieStore.removeAll {
+                        it.name == cookie.name && it.domain == cookie.domain && it.path == cookie.path
+                    }
+                    cookieStore.add(cookie)
+                }
+            }
+        }
+
+        override fun loadForRequest(url: HttpUrl): List<Cookie> {
+            synchronized(cookieStore) {
+                val now = System.currentTimeMillis()
+                cookieStore.removeAll { it.expiresAt < now }
+                return cookieStore.filter { it.matches(url) }
+            }
+        }
+    }
     private val bcProvider: BouncyCastleProvider by lazy {
         val existing = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) as? BouncyCastleProvider
         if (existing != null) return@lazy existing
@@ -66,6 +90,7 @@ object Transport {
         sslContext.init(keyManagers, arrayOf(trustManager), SecureRandom())
         return OkHttpClient.Builder()
             .sslSocketFactory(sslContext.socketFactory, trustManager)
+            .cookieJar(cookieJar)
             .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)

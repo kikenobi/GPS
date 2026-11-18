@@ -143,8 +143,8 @@ class YqtClient(
     fun findLastPosition(did: String, didId: String = ""): JSONObject {
         ensureLoggedIn()
         val resolvedDidId = resolveDidId(did, didId)
-        val path = sessionPath("/S10APP/v2_findLastPosition")
-        val params = Protocol.signedParams(
+
+        fun buildParams() = Protocol.signedParams(
             mapOf(
                 "language" to Protocol.DEFAULT_LANGUAGE,
                 "did_id" to resolvedDidId,
@@ -152,11 +152,13 @@ class YqtClient(
                 "id" to "",
             )
         )
-        var resp = requestJson("GET", path, query = params)
+
+        val path = sessionPath("/S10APP/v2_findLastPosition")
+        var resp = requestJson("GET", path, query = buildParams())
         if (Protocol.isLoginTimeout(resp)) {
             login()
             val retryPath = sessionPath("/S10APP/v2_findLastPosition")
-            resp = requestJson("GET", retryPath, query = params)
+            resp = requestJson("GET", retryPath, query = buildParams())
         }
         ensureStatus(resp, setOf(1, 4, 2))
         if (!resp.has("data")) resp.put("data", JSONArray())
