@@ -61,6 +61,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var fitDone = false
+    private var userBearing: Float = 0f
+    private var lastFix: Location? = null
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
@@ -136,10 +138,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (!fine && !coarse) return
         try {
             if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 2f, this, Looper.getMainLooper())
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 1000L, 0f, this, Looper.getMainLooper())
             }
             if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 5f, this, Looper.getMainLooper())
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 2000L, 0f, this, Looper.getMainLooper())
             }
             val last = lm.getLastKnownLocation(LocationManager.GPS_PROVIDER) ?: lm.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
             if (last != null) onLocationChanged(last)
@@ -147,9 +149,25 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     override fun onLocationChanged(location: Location) {
+        updateBearing(location)
         myLocation = GeoPoint(location.latitude, location.longitude)
         updateMyMarker()
-        if (following) onFollowTick()
+        if (following) {
+            binding.map.mapOrientation = -userBearing
+            onFollowTick()
+        }
+    }
+
+    private fun updateBearing(location: Location) {
+        if (location.hasBearing()) {
+            userBearing = location.bearing
+        } else {
+            val prev = lastFix
+            if (prev != null && prev.distanceTo(location) > 1f) {
+                userBearing = prev.bearingTo(location)
+            }
+        }
+        lastFix = location
     }
 
     private fun updateMyMarker() {
@@ -223,7 +241,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private fun selectDevice(did: String) {
         selectedDid = did
         val st = devices[did] ?: return
-        binding.routeText.text = "Seleccionado: ${st.info.name}"
+        val typeInfo = st.position?.locationType?.let { " · Posición: $it" } ?: ""
+        binding.routeText.text = "Seleccionado: ${st.info.name}$typeInfo"
         // reset route when target changes
         if (routeTargetDid != did) {
             clearRoute()
@@ -281,6 +300,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private fun buildInfo(st: WatchState): String {
         val p = st.position ?: return st.error ?: ""
         val parts = mutableListOf<String>()
+        p.locationType?.let { parts.add("Posición: $it") }
         p.positionDate?.let { parts.add(it) }
         p.address?.let { parts.add(it) }
         p.battery?.let { parts.add("Batería: $it%") }
@@ -360,6 +380,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         following = true
         binding.followButton.text = getString(R.string.stop_follow)
         binding.navInstructionText.visibility = View.VISIBLE
+        binding.map.mapOrientation = -userBearing
+        if (binding.map.zoomLevelDouble < 17.0) binding.map.controller.setZoom(17.0)
         requestRoute(force = true)
         startFollowLoop()
     }
@@ -371,6 +393,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.followButton.text = getString(R.string.follow)
         binding.navInstructionText.visibility = View.GONE
         binding.navInstructionText.text = ""
+        binding.map.mapOrientation = 0f
     }
 
     private fun startFollowLoop() {

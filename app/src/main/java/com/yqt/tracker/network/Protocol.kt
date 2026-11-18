@@ -183,6 +183,20 @@ object Protocol {
         return if (r.isNotEmpty()) r else null
     }
 
+    fun parseLocationType(row: JSONObject): String? {
+        val dt = coerceInt(row.opt("datatype"))
+            ?: coerceInt(row.opt("type"))
+            ?: coerceInt(row.opt("radiotype"))
+            ?: coerceInt(row.opt("positiontype"))
+        return when (dt?.let { abs(it) }) {
+            1 -> "GPS"
+            2 -> "LBS"
+            3 -> "WiFi"
+            4 -> "WiFi"
+            else -> if (dt != null) "Tipo $dt" else null
+        }
+    }
+
     data class ParsedPosition(
         val lat: Double?,
         val lng: Double?,
@@ -195,6 +209,7 @@ object Protocol {
         val pollStatus: Int?,
         val pollMessage: String?,
         val raw: JSONObject?,
+        val locationType: String? = null,
     )
 
     fun parseLastPosition(response: JSONObject): ParsedPosition {
@@ -206,7 +221,7 @@ object Protocol {
             row = data.optJSONObject(0)
         }
         if (row == null) {
-            return ParsedPosition(null, null, null, null, null, null, null, null, status, message, null)
+            return ParsedPosition(null, null, null, null, null, null, null, null, status, message, null, null)
         }
         var battery = coerceInt(row.opt("battery")) ?: coerceInt(response.opt("battery"))
         var lat = coerceDouble(row.opt("lat"))
@@ -236,6 +251,7 @@ object Protocol {
             pollStatus = status,
             pollMessage = message,
             raw = row,
+            locationType = parseLocationType(row),
         )
     }
 }

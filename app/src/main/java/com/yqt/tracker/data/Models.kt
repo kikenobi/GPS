@@ -19,6 +19,7 @@ data class WatchPosition(
     val positionDate: String? = null,
     val pollStatus: Int? = null,
     val pollMessage: String? = null,
+    val locationType: String? = null,
 )
 
 data class WatchState(

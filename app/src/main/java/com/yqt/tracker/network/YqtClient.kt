@@ -121,6 +121,7 @@ class YqtClient(
                         positionDate = parsed.positionDate,
                         pollStatus = parsed.pollStatus,
                         pollMessage = parsed.pollMessage,
+                        locationType = parsed.locationType,
                     )
                 } else null
                 val err = if (pos == null) (parsed.pollMessage?.ifBlank { "sin posición" }) else null
