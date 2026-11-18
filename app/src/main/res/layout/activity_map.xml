@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="?attr/colorPrimary"
+        android:theme="@style/ThemeOverlay.Material3.Dark.ActionBar"
+        app:title="@string/app_name" />
+
+    <LinearLayout
+        android:id="@+id/infoBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#111827"
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E5E7EB"
+            android:textSize="13sp"
+            android:text="Iniciando…" />
+
+        <TextView
+            android:id="@+id/routeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#93C5FD"
+            android:textSize="13sp"
+            android:text="" />
+
+        <TextView
+            android:id="@+id/navInstructionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:paddingTop="2dp"
+            android:visibility="gone"
+            android:text="" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <org.osmdroid.views.MapView
+            android:id="@+id/map"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|end"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+                android:id="@+id/followButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:text="@string/follow"
+                app:icon="@android:drawable/ic_menu_directions" />
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/myLocationButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:contentDescription="@string/my_location"
+                app:srcCompat="@android:drawable/ic_menu_mylocation" />
+        </LinearLayout>
+    </FrameLayout>
+
+</LinearLayout>

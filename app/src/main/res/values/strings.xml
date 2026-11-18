@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">YQT Tracker</string>
+    <string name="login_title">Iniciar sesión</string>
+    <string name="region">Región</string>
+    <string name="account">Cuenta (email/usuario)</string>
+    <string name="password">Contraseña</string>
+    <string name="login">Entrar</string>
+    <string name="logging_in">Iniciando sesión…</string>
+    <string name="error_required">Obligatorio</string>
+    <string name="error_login">Error de inicio de sesión</string>
+    <string name="error_network">Error de red</string>
+    <string name="my_location">Mi ubicación</string>
+    <string name="no_location">Sin ubicación</string>
+    <string name="refresh">Actualizar</string>
+    <string name="logout">Salir</string>
+    <string name="follow">Perseguir</string>
+    <string name="stop_follow">Detener</string>
+    <string name="route_to">Ruta a: %1$s</string>
+    <string name="devices_count">Relojes: %1$d/%2$d con posición</string>
+    <string name="updated_at">Actualizado: %1$s</string>
+    <string name="navigating">Navegando hacia %1$s</string>
+    <string name="rerouting">Recalculando ruta…</string>
+    <string name="no_route">Ruta no disponible</string>
+    <string name="location_permission_needed">Se necesita permiso de ubicación para mostrar tu posición y navegar</string>
+</resources>
