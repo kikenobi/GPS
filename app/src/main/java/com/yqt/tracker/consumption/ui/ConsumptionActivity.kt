@@ -61,7 +61,7 @@ class ConsumptionActivity : AppCompatActivity() {
             val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             binding.lastUpdateText.text = getString(R.string.consumption_last_update, if (last > 0) fmt.format(Date(last)) else "—")
             val periodKey = ConsumptionManager.currentPeriodKey(this@ConsumptionActivity)
-            val start = ConsumptionPrefs.periodStartLabel(this@ConsumptionActivity, ConsumptionPrefs.billingPeriodStartDay(this@ConsumptionActivity))
+            val start = ConsumptionPrefs.periodStartLabel(startDay = ConsumptionPrefs.billingPeriodStartDay(this@ConsumptionActivity))
             binding.periodText.text = "Periodo actual (lógico): $periodKey · ${getString(R.string.consumption_period_start, start)}"
             renderDocs()
         }
