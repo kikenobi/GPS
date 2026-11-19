@@ -15,6 +15,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.YQTTracker"
         android:usesCleartextTraffic="false">
+
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+
         <activity
             android:name=".ui.LoginActivity"
             android:exported="true">
@@ -27,6 +32,10 @@
             android:name=".ui.MapActivity"
             android:exported="false"
             android:launchMode="singleTop" />
+        <activity
+            android:name=".consumption.ui.ConsumptionActivity"
+            android:exported="false"
+            android:label="@string/consumption_control" />
     </application>
 
 </manifest>

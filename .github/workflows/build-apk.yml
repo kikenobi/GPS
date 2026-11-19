@@ -24,6 +24,16 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Configure Maps API key
+        env:
+          MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
+        run: |
+          if [ -z "$MAPS_API_KEY" ]; then
+            echo "MAPS_API_KEY=YOUR_MAPS_API_KEY_HERE" > secrets.properties
+          else
+            echo "MAPS_API_KEY=$MAPS_API_KEY" > secrets.properties
+          fi
+
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
 

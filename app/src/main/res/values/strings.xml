@@ -22,4 +22,11 @@
     <string name="rerouting">Recalculando ruta…</string>
     <string name="no_route">Ruta no disponible</string>
     <string name="location_permission_needed">Se necesita permiso de ubicación para mostrar tu posición y navegar</string>
+    <string name="consumption_control">Control de consumo API</string>
+    <string name="consumption_title">Consumo de Google Maps</string>
+    <string name="consumption_refresh">Actualizar datos</string>
+    <string name="consumption_last_update">Última actualización: %1$s</string>
+    <string name="consumption_period_start">Inicio de periodo: %1$s</string>
+    <string name="consumption_settings">Configuración y sincronización</string>
+    <string name="consumption_info">Diferencia entre consumo local, confirmado por Google Cloud, estimación y coste real.</string>
 </resources>
