@@ -121,6 +121,16 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
         binding.followButton.setOnClickListener { toggleFollow() }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
 
+        // Precarga de dispositivos/sesión para que aparezcan en el mapa al entrar
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                client?.ensureLoggedIn()
+                client?.discoverDevices()
+            } catch (_: Exception) {
+            }
+        }
+        refreshOnce(force = false)
+
         ensureLocationPermission()
         startLocationUpdates()
     }
@@ -154,6 +164,8 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
             mapSessionLogged = true
             logLocalMapSession()
         }
+        // Asegura carga/visualización de dispositivos al entrar en el mapa
+        refreshOnce(force = false)
         if (!refreshStarted) {
             refreshStarted = true
             startRefreshLoop()
