@@ -33,6 +33,12 @@ jobs:
           else
             echo "MAPS_API_KEY=$MAPS_API_KEY" > secrets.properties
           fi
+          # Required by Android/Secrets Gradle Plugin in CI
+          if [ -n "$ANDROID_HOME" ]; then
+            echo "sdk.dir=$ANDROID_HOME" > local.properties
+          else
+            : > local.properties
+          fi
 
       - name: Accept Android SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses || true
