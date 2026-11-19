@@ -50,6 +50,11 @@ android {
     }
 }
 
+secrets {
+    propertiesFileName = "secrets.properties"
+    defaultPropertiesFileName = "local.defaults.properties"
+}
+
 kapt {
     correctErrorTypes = true
 }
