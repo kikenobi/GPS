@@ -112,24 +112,18 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
         client = YqtClient(this, creds.first, creds.second, creds.third)
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
 
-        val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment
-        mapFragment.getMapAsync(this)
+        val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as? SupportMapFragment
+        if (mapFragment != null) {
+            mapFragment.getMapAsync(this)
+        } else {
+            setStatus("Error: no se pudo inicializar el mapa")
+        }
 
         tts = TextToSpeech(this, this)
 
         binding.myLocationButton.setOnClickListener { centerOnMe() }
         binding.followButton.setOnClickListener { toggleFollow() }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
-
-        // Precarga de dispositivos/sesión para que aparezcan en el mapa al entrar
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                client?.ensureLoggedIn()
-                client?.discoverDevices()
-            } catch (_: Exception) {
-            }
-        }
-        refreshOnce(force = false)
 
         ensureLocationPermission()
         startLocationUpdates()
@@ -147,6 +141,9 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
         } catch (_: SecurityException) {
         }
         map.moveCamera(CameraUpdateFactory.newLatLngZoom(LatLng(40.4168, -3.7038), 6f))
+        if (binding.statusText.text == "Iniciando…") {
+            setStatus("Mapa listo. Cargando dispositivos…")
+        }
 
         map.setOnMarkerClickListener { marker ->
             val did = marker.tag as? String
@@ -164,11 +161,11 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
             mapSessionLogged = true
             logLocalMapSession()
         }
-        // Asegura carga/visualización de dispositivos al entrar en el mapa
-        refreshOnce(force = false)
         if (!refreshStarted) {
             refreshStarted = true
             startRefreshLoop()
+        } else {
+            refreshOnce(force = false)
         }
     }
 
