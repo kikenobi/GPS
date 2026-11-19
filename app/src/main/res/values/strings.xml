@@ -15,6 +15,12 @@
     <string name="logout">Salir</string>
     <string name="follow">Perseguir</string>
     <string name="stop_follow">Detener</string>
+    <string name="follow_external">Perseguir en Google Maps</string>
+    <string name="stop_follow_external">Detener Google Maps</string>
+    <string name="external_follow_started">Seguimiento en segundo plano iniciado (Google Maps externo)</string>
+    <string name="external_follow_stopped">Seguimiento en segundo plano detenido</string>
+    <string name="external_follow_notification_title">Persecución en Google Maps</string>
+    <string name="external_follow_notification_text">Siguiendo %1$s y actualizando el destino en Google Maps</string>
     <string name="route_to">Ruta a: %1$s</string>
     <string name="devices_count">Relojes: %1$d/%2$d con posición</string>
     <string name="updated_at">Actualizado: %1$s</string>

@@ -47,6 +47,7 @@ import com.yqt.tracker.data.RouteInfo
 import com.yqt.tracker.data.WatchState
 import com.yqt.tracker.databinding.ActivityMapBinding
 import com.yqt.tracker.network.YqtClient
+import com.yqt.tracker.service.ExternalNavFollowService
 import com.yqt.tracker.util.GeoUtils
 import com.yqt.tracker.util.Prefs
 import kotlinx.coroutines.*
@@ -79,6 +80,7 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
     private var routeJob: Job? = null
     private var followJob: Job? = null
     private var following = false
+    private var externalFollowing = false
     private var currentRoute: RouteInfo? = null
     private var routeTargetDid: String? = null
     private var routeTargetPoint: LatLng? = null
@@ -117,6 +119,7 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
 
         binding.myLocationButton.setOnClickListener { centerOnMe() }
         binding.followButton.setOnClickListener { toggleFollow() }
+        binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
 
         ensureLocationPermission()
         startLocationUpdates()
@@ -190,6 +193,7 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
     private fun logout() {
         Prefs.clear(this)
         stopFollowing()
+        stopExternalFollowing(showToast = false)
         goLogin()
     }
 
@@ -537,6 +541,44 @@ class MapActivity : AppCompatActivity(), OnMapReadyCallback, TextToSpeech.OnInit
                 .build()
             map.animateCamera(CameraUpdateFactory.newCameraPosition(camera))
         }
+    }
+
+    private fun toggleExternalFollow() {
+        if (externalFollowing) stopExternalFollowing(showToast = true) else startExternalFollowing()
+    }
+
+    private fun startExternalFollowing() {
+        val did = selectedDid
+        val st = did?.let { devices[it] }
+        if (did == null || st?.position == null) {
+            Toast.makeText(this, "Selecciona un reloj con posición", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Avoid duplicate/confusing modes; external mode runs in foreground service and opens Google Maps.
+        if (following) stopFollowing()
+        externalFollowing = true
+        binding.followExternalButton.text = getString(R.string.stop_follow_external)
+        try {
+            ExternalNavFollowService.start(this, did, st.info.name)
+            Toast.makeText(this, R.string.external_follow_started, Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            externalFollowing = false
+            binding.followExternalButton.text = getString(R.string.follow_external)
+            Toast.makeText(this, "No se pudo iniciar el seguimiento externo: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun stopExternalFollowing(showToast: Boolean) {
+        if (!externalFollowing) {
+            // ensure service stopped even if flag out of sync
+            try { ExternalNavFollowService.stop(this) } catch (_: Exception) {}
+            binding.followExternalButton.text = getString(R.string.follow_external)
+            return
+        }
+        externalFollowing = false
+        binding.followExternalButton.text = getString(R.string.follow_external)
+        try { ExternalNavFollowService.stop(this) } catch (_: Exception) {}
+        if (showToast) Toast.makeText(this, R.string.external_follow_stopped, Toast.LENGTH_SHORT).show()
     }
 
     private fun startFollowLoop() {
