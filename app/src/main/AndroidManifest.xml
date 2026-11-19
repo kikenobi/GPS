@@ -19,10 +19,6 @@
         android:theme="@style/Theme.YQTTracker"
         android:usesCleartextTraffic="false">
 
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="${MAPS_API_KEY}" />
-
         <activity
             android:name=".ui.LoginActivity"
             android:exported="true">
