@@ -185,60 +185,71 @@ class ExternalNavFollowService : Service() {
     }
 
     private fun openExternalNavigation(lat: Double, lng: Double, coordText: String, name: String, whenText: String) {
-        val navUri = Uri.parse("google.navigation:q=$lat,$lng&mode=d")
-        val mapsIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
+        val latStr = String.format(Locale.US, "%.6f", lat)
+        val lngStr = String.format(Locale.US, "%.6f", lng)
+        val q = "$latStr,$lngStr"
+
+        val mapsNavUri = Uri.parse("google.navigation:q=$q&mode=d")
+        val mapsIntent = Intent(Intent.ACTION_VIEW, mapsNavUri).apply {
             setPackage("com.google.android.apps.maps")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
         val mapsInstalled = try {
             packageManager.getPackageInfo("com.google.android.apps.maps", 0)
             true
         } catch (_: Exception) {
-            mapsIntent.resolveActivity(packageManager) != null
+            false
         }
 
         var opened = false
         var msg = ""
 
-        if (mapsInstalled) {
-            try {
-                startActivity(mapsIntent)
-                opened = true
-                msg = "Actualizando Google Maps: $name · $coordText · $whenText"
-            } catch (_: Exception) {
-                try {
-                    val genericIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    }
-                    startActivity(genericIntent)
-                    opened = true
-                    msg = "Actualizando navegación: $name · $coordText · $whenText"
-                } catch (_: Exception) {
-                    opened = false
-                }
-            }
+        fun tryStart(intent: Intent): Boolean = try {
+            startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
         }
 
-        if (!opened) {
-            // Evitar fallback al navegador con navegación automática: en algunos navegadores
-            // aparece un aviso al recibir una nueva URL ("cerrar/salir"). Abrimos destino sin forzar navegación.
-            try {
-                val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$lat,$lng")
-                val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+        if (mapsInstalled || mapsIntent.resolveActivity(packageManager) != null) {
+            opened = tryStart(mapsIntent)
+            if (!opened) {
+                val altIntent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:$q?q=$q(${Uri.encode(name)})")).apply {
+                    setPackage("com.google.android.apps.maps")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                if (webIntent.resolveActivity(packageManager) != null) {
-                    startActivity(webIntent)
-                    opened = true
-                    msg = "Google Maps no disponible: abierto destino en navegador/app de mapas: $name · $coordText · $whenText"
-                }
-            } catch (_: Exception) {
+                opened = tryStart(altIntent)
+            }
+            if (opened) {
+                msg = "Actualizando Google Maps: $name · $coordText · $whenText"
             }
         }
 
         if (!opened) {
-            msg = "No se pudo abrir navegación para: $name · $coordText · $whenText (instala Google Maps)"
+            val genericNav = Intent(Intent.ACTION_VIEW, mapsNavUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            opened = tryStart(genericNav)
+            if (opened) {
+                msg = "Actualizando navegación: $name · $coordText · $whenText"
+            }
+        }
+
+        if (!opened) {
+            // Fallback sin forzar modo navegación automática del navegador para evitar avisos de "cerrar/salir"
+            val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$q")
+            val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            opened = tryStart(webIntent)
+            if (opened) {
+                msg = "Google Maps no disponible: abierto destino en mapa: $name · $coordText · $whenText"
+            }
+        }
+
+        if (!opened) {
+            msg = "No se pudo abrir navegación para: $name · $coordText · $whenText"
         }
 
         showToast(msg)
