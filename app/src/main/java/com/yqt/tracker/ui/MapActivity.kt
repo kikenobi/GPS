@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
-import android.graphics.drawable.BitmapDrawable
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -31,10 +30,21 @@ import com.yqt.tracker.service.ExternalNavFollowService
 import com.yqt.tracker.util.GeoUtils
 import com.yqt.tracker.util.Prefs
 import kotlinx.coroutines.*
-import org.osmdroid.util.BoundingBox
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
+import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
+import org.maplibre.android.geometry.LatLng
+import org.maplibre.android.geometry.LatLngBounds
+import org.maplibre.android.maps.MapLibreMap
+import org.maplibre.android.maps.Style
+import org.maplibre.android.style.layers.LineLayer
+import org.maplibre.android.style.layers.Property
+import org.maplibre.android.style.layers.PropertyFactory
+import org.maplibre.android.style.layers.SymbolLayer
+import org.maplibre.android.style.sources.GeoJsonSource
+import org.maplibre.geojson.Feature
+import org.maplibre.geojson.FeatureCollection
+import org.maplibre.geojson.LineString
+import org.maplibre.geojson.Point
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.max
@@ -43,13 +53,12 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private lateinit var binding: ActivityMapBinding
     private var client: YqtClient? = null
 
-    private val deviceMarkers = mutableMapOf<String, Marker>()
-    private var myMarker: Marker? = null
-    private var routeLine: Polyline? = null
+    private var mapLibreMap: MapLibreMap? = null
+    private var mapStyle: Style? = null
 
     private var devices: Map<String, WatchState> = emptyMap()
     private var selectedDid: String? = null
-    private var myLocation: GeoPoint? = null
+    private var myLocation: LatLng? = null
 
     private var refreshJob: Job? = null
     private var routeJob: Job? = null
@@ -58,7 +67,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private var externalFollowing = false
     private var currentRoute: RouteInfo? = null
     private var routeTargetDid: String? = null
-    private var routeTargetPoint: GeoPoint? = null
+    private var routeTargetPoint: LatLng? = null
     private var lastRouteFetchAt = 0L
     private var currentStepIndex = 0
     private var lastSpokenStep = -1
@@ -70,6 +79,17 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
+
+    companion object {
+        private const val STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+        private const val SRC_DEVICES = "devices-source"
+        private const val LAYER_DEVICES = "devices-layer"
+        private const val SRC_ME = "me-source"
+        private const val LAYER_ME = "me-layer"
+        private const val SRC_ROUTE = "route-source"
+        private const val LAYER_ROUTE = "route-layer"
+        private const val IMG_ME = "me-icon"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,19 +104,89 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
         client = YqtClient(this, creds.first, creds.second, creds.third)
 
-        binding.map.setMultiTouchControls(true)
-        binding.map.controller.setZoom(6.0)
-        binding.map.controller.setCenter(GeoPoint(40.4168, -3.7038))
-
         tts = TextToSpeech(this, this)
 
         binding.myLocationButton.setOnClickListener { centerOnMe() }
         binding.followButton.setOnClickListener { toggleFollow() }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
 
+        binding.map.onCreate(savedInstanceState)
+        binding.map.getMapAsync { map ->
+            mapLibreMap = map
+            map.setStyle(Style.Builder().fromUri(STYLE_URL)) { style ->
+                mapStyle = style
+                setupMapLayers(style)
+                val pos = CameraPosition.Builder()
+                    .target(LatLng(40.4168, -3.7038))
+                    .zoom(6.0)
+                    .build()
+                map.cameraPosition = pos
+                map.addOnMapClickListener { point ->
+                    handleMapClick(point)
+                    true
+                }
+                // apply any pending state
+                updateMyMarker()
+                updateDeviceMarkers()
+                updateRouteLayer()
+            }
+        }
+
         ensureLocationPermission()
         startLocationUpdates()
         startRefreshLoop()
+    }
+
+    private fun setupMapLayers(style: Style) {
+        if (style.getImage(IMG_ME) == null) {
+            style.addImage(IMG_ME, makeMyLocationBitmap())
+        }
+        if (style.getSource(SRC_ROUTE) == null) {
+            style.addSource(GeoJsonSource(SRC_ROUTE, FeatureCollection.fromFeatures(emptyArray())))
+            style.addLayer(
+                LineLayer(LAYER_ROUTE, SRC_ROUTE).withProperties(
+                    PropertyFactory.lineColor(Color.parseColor("#16A34A")),
+                    PropertyFactory.lineWidth(5f),
+                    PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                    PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+                )
+            )
+        }
+        if (style.getSource(SRC_DEVICES) == null) {
+            style.addSource(GeoJsonSource(SRC_DEVICES, FeatureCollection.fromFeatures(emptyArray())))
+            style.addLayer(
+                SymbolLayer(LAYER_DEVICES, SRC_DEVICES).withProperties(
+                    PropertyFactory.iconImage(org.maplibre.android.style.expressions.Expression.get("icon")),
+                    PropertyFactory.iconAllowOverlap(true),
+                    PropertyFactory.iconIgnorePlacement(true),
+                    PropertyFactory.iconAnchor(Property.ICON_ANCHOR_BOTTOM)
+                )
+            )
+        }
+        if (style.getSource(SRC_ME) == null) {
+            style.addSource(GeoJsonSource(SRC_ME, FeatureCollection.fromFeatures(emptyArray())))
+            style.addLayer(
+                SymbolLayer(LAYER_ME, SRC_ME).withProperties(
+                    PropertyFactory.iconImage(IMG_ME),
+                    PropertyFactory.iconAllowOverlap(true),
+                    PropertyFactory.iconIgnorePlacement(true),
+                    PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER)
+                )
+            )
+        }
+        // ensure route below markers if possible (layers added in order; route added first so below devices/me added later)
+    }
+
+    private fun handleMapClick(point: LatLng) {
+        val map = mapLibreMap ?: return
+        val screen = map.projection.toScreenLocation(point)
+        val features = map.queryRenderedFeatures(screen, LAYER_DEVICES)
+        if (features.isNotEmpty()) {
+            val did = features[0].getStringProperty("did")
+            if (!did.isNullOrBlank()) {
+                selectDevice(did)
+            }
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -173,10 +263,13 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     override fun onLocationChanged(location: Location) {
         updateBearing(location)
-        myLocation = GeoPoint(location.latitude, location.longitude)
+        myLocation = LatLng(location.latitude, location.longitude)
         updateMyMarker()
         if (following) {
-            binding.map.mapOrientation = -userBearing
+            mapLibreMap?.let { map ->
+                val cam = CameraPosition.Builder(map.cameraPosition).bearing(userBearing.toDouble()).build()
+                map.cameraPosition = cam
+            }
             onFollowTick()
         }
     }
@@ -194,27 +287,22 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun updateMyMarker() {
-        val me = myLocation ?: return
-        if (myMarker == null) {
-            val m = Marker(binding.map)
-            m.position = me
-            m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-            m.title = getString(R.string.my_location)
-            m.icon = makeMyLocationIcon()
-            m.setOnMarkerClickListener { _, _ -> true }
-            binding.map.overlays.add(m)
-            myMarker = m
+        val style = mapStyle ?: return
+        val me = myLocation
+        val features = if (me != null) {
+            arrayOf(Feature.fromGeometry(Point.fromLngLat(me.longitude, me.latitude)))
         } else {
-            myMarker?.position = me
+            emptyArray()
         }
-        binding.map.invalidate()
+        style.getSourceAs<GeoJsonSource>(SRC_ME)?.setGeoJson(FeatureCollection.fromFeatures(features))
     }
 
     private fun centerOnMe() {
         val me = myLocation
-        if (me != null) {
-            binding.map.controller.animateTo(me)
-            if (binding.map.zoomLevelDouble < 16.0) binding.map.controller.setZoom(16.0)
+        val map = mapLibreMap
+        if (me != null && map != null) {
+            val zoom = if (map.cameraPosition.zoom < 16.0) 16.0 else map.cameraPosition.zoom
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(me, zoom))
         } else {
             Toast.makeText(this, R.string.location_permission_needed, Toast.LENGTH_SHORT).show()
         }
@@ -282,56 +370,53 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun updateDeviceMarkers() {
-        val seen = mutableSetOf<String>()
+        val style = mapStyle ?: return
+        val features = mutableListOf<Feature>()
         for ((did, st) in devices) {
             val pos = st.position ?: continue
-            seen.add(did)
-            val gp = GeoPoint(pos.lat, pos.lng)
-            val marker = deviceMarkers[did]
-            if (marker == null) {
-                val m = Marker(binding.map)
-                m.setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                m.icon = makeLabelIcon(st.info.name, did == selectedDid)
-                m.position = gp
-                m.title = st.info.name
-                m.setOnMarkerClickListener { _, _ ->
-                    selectDevice(did)
-                    m.showInfoWindow()
-                    true
-                }
-                binding.map.overlays.add(m)
-                deviceMarkers[did] = m
-            } else {
-                marker.position = gp
-                marker.icon = makeLabelIcon(st.info.name, did == selectedDid)
-            }
-            deviceMarkers[did]?.subDescription = buildInfo(st)
+            val selected = did == selectedDid
+            val iconId = deviceIconId(did, selected)
+            ensureDeviceIcon(style, did, st.info.name, selected)
+            val f = Feature.fromGeometry(Point.fromLngLat(pos.lng, pos.lat))
+            f.addStringProperty("did", did)
+            f.addStringProperty("icon", iconId)
+            f.addStringProperty("name", st.info.name)
+            features.add(f)
         }
-        // remove missing
-        val it = deviceMarkers.iterator()
-        while (it.hasNext()) {
-            val e = it.next()
-            if (e.key !in seen) {
-                binding.map.overlays.remove(e.value)
-                it.remove()
-            }
-        }
+        style.getSourceAs<GeoJsonSource>(SRC_DEVICES)?.setGeoJson(FeatureCollection.fromFeatures(features))
+
         if (!fitDone) {
-            val pts = devices.values.mapNotNull { it.position?.let { p -> GeoPoint(p.lat, p.lng) } }.toMutableList()
+            val pts = mutableListOf<LatLng>()
+            devices.values.mapNotNull { it.position }.forEach { pts.add(LatLng(it.lat, it.lng)) }
             myLocation?.let { pts.add(it) }
-            if (pts.size == 1) {
-                binding.map.controller.setZoom(16.0)
-                binding.map.controller.setCenter(pts[0])
-                fitDone = true
-            } else if (pts.size > 1) {
-                try {
-                    binding.map.zoomToBoundingBox(BoundingBox.fromGeoPoints(pts), true, 80)
-                } catch (_: Exception) {
+            val map = mapLibreMap
+            if (map != null) {
+                if (pts.size == 1) {
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(pts[0], 16.0))
+                    fitDone = true
+                } else if (pts.size > 1) {
+                    try {
+                        val b = LatLngBounds.Builder()
+                        pts.forEach { b.include(it) }
+                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 80))
+                        fitDone = true
+                    } catch (_: Exception) {
+                    }
                 }
-                fitDone = true
             }
         }
-        binding.map.invalidate()
+    }
+
+    private fun deviceIconId(did: String, selected: Boolean): String = "dev_${did}_${if (selected) "s" else "n"}"
+
+    private fun ensureDeviceIcon(style: Style, did: String, name: String, selected: Boolean) {
+        val id = deviceIconId(did, selected)
+        // regenerate to reflect current selection/name
+        val bmp = makeLabelBitmap(name, selected)
+        if (style.getImage(id) != null) {
+            style.removeImage(id)
+        }
+        style.addImage(id, bmp)
     }
 
     private fun buildInfo(st: WatchState): String {
@@ -345,7 +430,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return parts.joinToString("\n")
     }
 
-    private fun makeLabelIcon(name: String, selected: Boolean): BitmapDrawable {
+    private fun makeLabelBitmap(name: String, selected: Boolean): Bitmap {
         val padH = 16; val padV = 10; val pinR = 14f
         val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -358,36 +443,36 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val labelW = (textW + padH * 2).toInt()
         val labelH = (textH + padV * 2).toInt()
         val gap = 6
-        val w = (pinR * 2 + gap + labelW + 4).toInt()
-        val h = max((pinR * 3).toInt(), labelH + 8)
+        val pinHeight = (pinR * 2 + pinR * 1.6f + 4).toInt() // circle + tip
+        val w = max(labelW + 8, (pinR * 2 + 8).toInt())
+        val h = labelH + gap + pinHeight + 4
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        // pin
-        val pinCx = pinR + 2
-        val pinCy = h / 2f
+        val cx = w / 2f
+        // pin at bottom center, tip at bottom
+        val tipY = h - 2f
+        val pinCircleCy = tipY - pinR * 1.6f
         val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (selected) Color.parseColor("#2563EB") else Color.parseColor("#DC2626") }
-        c.drawCircle(pinCx, pinCy - 6, pinR, pinPaint)
+        c.drawCircle(cx, pinCircleCy, pinR, pinPaint)
         val path = Path()
-        path.moveTo(pinCx - pinR * 0.7f, pinCy - 6)
-        path.lineTo(pinCx + pinR * 0.7f, pinCy - 6)
-        path.lineTo(pinCx, pinCy + pinR * 1.6f)
+        path.moveTo(cx - pinR * 0.7f, pinCircleCy)
+        path.lineTo(cx + pinR * 0.7f, pinCircleCy)
+        path.lineTo(cx, tipY)
         path.close()
         c.drawPath(path, pinPaint)
         val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
-        c.drawCircle(pinCx, pinCy - 6, pinR * 0.45f, dotPaint)
-        // label box
-        val lx = pinCx + pinR + gap
-        val ly = (h - labelH) / 2f
+        c.drawCircle(cx, pinCircleCy, pinR * 0.45f, dotPaint)
+        // label above pin
+        val ly = pinCircleCy - pinR - gap - labelH
+        val lx = (w - labelW) / 2f
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (selected) Color.parseColor("#2563EB") else Color.parseColor("#111827") }
         val rect = RectF(lx, ly, lx + labelW, ly + labelH)
         c.drawRoundRect(rect, 12f, 12f, bg)
         c.drawText(name, lx + padH, ly + padV - fm.ascent, paintText)
-        val d = BitmapDrawable(resources, bmp)
-        d.setBounds(0, 0, w, h)
-        return d
+        return bmp
     }
 
-    private fun makeMyLocationIcon(): BitmapDrawable {
+    private fun makeMyLocationBitmap(): Bitmap {
         val size = 48
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
@@ -396,9 +481,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 4f }
         c.drawCircle(center, center, 14f, fill)
         c.drawCircle(center, center, 14f, stroke)
-        val d = BitmapDrawable(resources, bmp)
-        d.setBounds(0, 0, size, size)
-        return d
+        return bmp
     }
 
     private fun toggleFollow() {
@@ -421,8 +504,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         following = true
         binding.followButton.text = getString(R.string.stop_follow)
         binding.navInstructionText.visibility = View.VISIBLE
-        binding.map.mapOrientation = -userBearing
-        if (binding.map.zoomLevelDouble < 17.0) binding.map.controller.setZoom(17.0)
+        mapLibreMap?.let { map ->
+            val zoom = if (map.cameraPosition.zoom < 17.0) 17.0 else map.cameraPosition.zoom
+            val cam = CameraPosition.Builder(map.cameraPosition)
+                .bearing(userBearing.toDouble())
+                .zoom(zoom)
+                .build()
+            map.cameraPosition = cam
+        }
         requestRoute(force = true)
         startFollowLoop()
     }
@@ -434,7 +523,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.followButton.text = getString(R.string.follow)
         binding.navInstructionText.visibility = View.GONE
         binding.navInstructionText.text = ""
-        binding.map.mapOrientation = 0f
+        mapLibreMap?.let { map ->
+            val cam = CameraPosition.Builder(map.cameraPosition).bearing(0.0).build()
+            map.cameraPosition = cam
+        }
     }
 
     private fun toggleExternalFollow() {
@@ -499,13 +591,42 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun clearRoute() {
-        routeLine?.let { binding.map.overlays.remove(it) }
-        routeLine = null
         currentRoute = null
         routeTargetDid = null
         routeTargetPoint = null
         currentStepIndex = 0
         lastSpokenStep = -1
+        updateRouteLayer()
+    }
+
+    private fun updateRouteLayer(points: List<LatLng> = emptyList(), dashed: Boolean = false, color: String = "#16A34A") {
+        val style = mapStyle ?: return
+        val source = style.getSourceAs<GeoJsonSource>(SRC_ROUTE) ?: return
+        if (points.size >= 2) {
+            val coords = points.map { Point.fromLngLat(it.longitude, it.latitude) }
+            source.setGeoJson(LineString.fromLngLats(coords))
+        } else {
+            source.setGeoJson(FeatureCollection.fromFeatures(emptyArray()))
+        }
+
+        var layer = style.getLayerAs<LineLayer>(LAYER_ROUTE)
+        if (layer != null) {
+            style.removeLayer(LAYER_ROUTE)
+        }
+        val builder = LineLayer(LAYER_ROUTE, SRC_ROUTE).withProperties(
+            PropertyFactory.lineColor(Color.parseColor(color)),
+            PropertyFactory.lineWidth(if (dashed) 4f else 5f),
+            PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+            PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
+        )
+        if (dashed) {
+            builder.withProperties(PropertyFactory.lineDasharray(arrayOf(2f, 1.5f)))
+        }
+        if (style.getLayer(LAYER_DEVICES) != null) {
+            style.addLayerBelow(builder, LAYER_DEVICES)
+        } else {
+            style.addLayer(builder)
+        }
     }
 
     private fun requestRoute(force: Boolean) {
@@ -513,7 +634,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val st = devices[did] ?: return
         val tp = st.position ?: return
         val me = myLocation ?: return
-        val target = GeoPoint(tp.lat, tp.lng)
+        val target = LatLng(tp.lat, tp.lng)
         val now = System.currentTimeMillis()
         val moved = routeTargetPoint?.let { GeoUtils.haversineMeters(it.latitude, it.longitude, target.latitude, target.longitude) } ?: Double.MAX_VALUE
         val minMove = ConsumptionPrefs.rerouteMinDistanceMeters(this).toDouble().coerceAtLeast(5.0)
@@ -537,55 +658,35 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
     }
 
-    private fun applyRoute(did: String, target: GeoPoint, route: RouteInfo) {
+    private fun applyRoute(did: String, target: LatLng, route: RouteInfo) {
         currentRoute = route
         routeTargetDid = did
         routeTargetPoint = target
         lastRouteFetchAt = System.currentTimeMillis()
         currentStepIndex = 0
         lastSpokenStep = -1
-        val pts = route.geometry.map { GeoPoint(it.first, it.second) }
-        if (routeLine == null) {
-            routeLine = Polyline().apply {
-                outlinePaint.color = Color.parseColor("#16A34A")
-                outlinePaint.strokeWidth = 10f
-            }
-            binding.map.overlays.add(routeLine)
-        }
-        routeLine?.setPoints(pts)
+        val pts = route.geometry.map { LatLng(it.first, it.second) }
+        updateRouteLayer(pts, dashed = false, color = "#16A34A")
         val name = devices[did]?.info?.name ?: did
         binding.routeText.text = getString(R.string.route_to, name) + ": ${GeoUtils.formatDistanceMeters(route.distanceMeters)}, ~${GeoUtils.formatDurationSeconds(route.durationSeconds)}"
-        binding.map.invalidate()
         if (following) updateNavigationInstruction()
     }
 
-    private fun applyFallbackRoute(did: String, target: GeoPoint, name: String) {
+    private fun applyFallbackRoute(did: String, target: LatLng, name: String) {
         val me = myLocation ?: return
         currentRoute = null
         routeTargetDid = did
         routeTargetPoint = target
         val pts = listOf(me, target)
-        if (routeLine == null) {
-            routeLine = Polyline().apply {
-                outlinePaint.color = Color.parseColor("#F59E0B")
-                outlinePaint.strokeWidth = 8f
-                outlinePaint.pathEffect = DashPathEffect(floatArrayOf(20f, 12f), 0f)
-            }
-            binding.map.overlays.add(routeLine)
-        } else {
-            routeLine?.outlinePaint?.color = Color.parseColor("#F59E0B")
-            routeLine?.outlinePaint?.pathEffect = DashPathEffect(floatArrayOf(20f, 12f), 0f)
-        }
-        routeLine?.setPoints(pts)
+        updateRouteLayer(pts, dashed = true, color = "#F59E0B")
         val d = GeoUtils.haversineMeters(me.latitude, me.longitude, target.latitude, target.longitude)
         binding.routeText.text = getString(R.string.route_to, name) + ": ${GeoUtils.formatDistanceMeters(d)} (línea directa)"
-        binding.map.invalidate()
     }
 
     private fun maybeRerouteForTargetMove() {
         val did = routeTargetDid ?: selectedDid ?: return
         val tp = devices[did]?.position ?: return
-        val target = GeoPoint(tp.lat, tp.lng)
+        val target = LatLng(tp.lat, tp.lng)
         val moved = routeTargetPoint?.let { GeoUtils.haversineMeters(it.latitude, it.longitude, target.latitude, target.longitude) } ?: Double.MAX_VALUE
         val minMove = ConsumptionPrefs.rerouteMinDistanceMeters(this).toDouble().coerceAtLeast(5.0)
         if (moved > minMove) requestRoute(force = true)
@@ -593,8 +694,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun onFollowTick() {
         val me = myLocation ?: return
-        // keep camera following user
-        binding.map.controller.animateTo(me)
+        val map = mapLibreMap
+        if (map != null) {
+            val cam = CameraPosition.Builder(map.cameraPosition)
+                .target(me)
+                .bearing(userBearing.toDouble())
+                .build()
+            map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+        }
         val route = currentRoute
         if (route != null) {
             val off = GeoUtils.distanceToPolylineMeters(me.latitude, me.longitude, route.geometry)
@@ -673,14 +780,34 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        binding.map.onStart()
+    }
+
     override fun onResume() {
         super.onResume()
         binding.map.onResume()
     }
 
     override fun onPause() {
-        super.onPause()
         binding.map.onPause()
+        super.onPause()
+    }
+
+    override fun onStop() {
+        binding.map.onStop()
+        super.onStop()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        binding.map.onSaveInstanceState(outState)
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        binding.map.onLowMemory()
     }
 
     override fun onDestroy() {
@@ -693,6 +820,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
         tts?.stop()
         tts?.shutdown()
+        binding.map.onDestroy()
         super.onDestroy()
     }
 }
