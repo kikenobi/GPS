@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.RingtoneManager
 import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
@@ -15,6 +17,9 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.widget.Toast
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.core.app.NotificationCompat
 import com.yqt.tracker.R
 import com.yqt.tracker.network.Protocol
@@ -102,19 +107,43 @@ class ExternalNavFollowService : Service() {
     }
 
     private suspend fun tick() {
-        val did = targetDid ?: return
-        val c = client ?: run { ensureClient(); client } ?: return
-        try { c.ensureLoggedIn() } catch (_: Exception) { return }
+        val did = targetDid ?: run {
+            updateNotification("Sin dispositivo seleccionado")
+            return
+        }
+        val c = client ?: run {
+            ensureClient()
+            client
+        } ?: run {
+            updateNotification("Sin sesión (inicia sesión en la app)")
+            return
+        }
+        try { c.ensureLoggedIn() } catch (e: Exception) {
+            updateNotification("Error de sesión: ${e.message ?: "desconocido"}")
+            return
+        }
         val info = c.deviceIndex[did]
         val didId = (info?.get("did_id") ?: info?.get("didId") ?: "").toString()
         val name = ((info?.get("nickname") ?: info?.get("rolename") ?: info?.get("name") ?: targetName).toString()).ifBlank { targetName }
         targetName = name
         try { c.freshPosition(did) } catch (_: Exception) { }
 
-        val resp = try { c.findLastPosition(did, didId) } catch (_: Exception) { null } ?: return
+        val resp = try { c.findLastPosition(did, didId) } catch (e: Exception) {
+            updateNotification("Error al obtener posición: ${e.message ?: "desconocido"}")
+            return
+        } ?: run {
+            updateNotification("Sin respuesta de posición: $name")
+            return
+        }
         val parsed = Protocol.parseLastPosition(resp)
-        val lat = parsed.lat ?: return
-        val lng = parsed.lng ?: return
+        val lat = parsed.lat ?: run {
+            updateNotification("Sin coordenadas para: $name")
+            return
+        }
+        val lng = parsed.lng ?: run {
+            updateNotification("Sin coordenadas para: $name")
+            return
+        }
 
         val prevKnownLat = lastKnownLat
         val prevKnownLng = lastKnownLng
@@ -123,7 +152,8 @@ class ExternalNavFollowService : Service() {
         } else {
             Double.MAX_VALUE
         }
-        if (prevKnownLat == null || prevKnownLng == null || movedFromKnown > 1.0) {
+        val positionChanged = (prevKnownLat == null || prevKnownLng == null || movedFromKnown > 1.0)
+        if (positionChanged) {
             playPositionSound()
         }
         lastKnownLat = lat
@@ -137,18 +167,24 @@ class ExternalNavFollowService : Service() {
         val minInterval = 15000L
         val shouldSend = (prevLat == null || prevLng == null) || (moved >= minMove && (now - lastSentAt) >= minInterval)
 
+        val coordText = String.format(Locale.US, "%.5f, %.5f", lat, lng)
+        val whenText = timeFmt.format(Date())
+
         if (shouldSend) {
-            openExternalNavigation(lat, lng)
+            openExternalNavigation(lat, lng, coordText, name, whenText)
             lastSentLat = lat
             lastSentLng = lng
             lastSentAt = now
+        } else if (positionChanged) {
+            val msg = "Posición actualizada: $name · $coordText · $whenText"
+            updateNotification(msg)
+            showToast(msg)
         } else {
-            updateNotification("Siguiendo: $name · sin cambios significativos")
+            updateNotification("Siguiendo: $name · sin cambios ($coordText · $whenText)")
         }
     }
 
-    private fun openExternalNavigation(lat: Double, lng: Double) {
-        val coordText = String.format("%.5f, %.5f", lat, lng)
+    private fun openExternalNavigation(lat: Double, lng: Double, coordText: String, name: String, whenText: String) {
         val navUri = Uri.parse("google.navigation:q=$lat,$lng&mode=d")
         val intent = Intent(Intent.ACTION_VIEW, navUri).apply {
             setPackage("com.google.android.apps.maps")
@@ -171,13 +207,11 @@ class ExternalNavFollowService : Service() {
             }
         }
         val msg = if (opened) {
-            "Abriendo $mode con destino: $coordText"
+            "Abriendo $mode: $name · $coordText · $whenText"
         } else {
-            "No se pudo abrir Google Maps/navegador para: $coordText"
+            "No se pudo abrir Google Maps/navegador: $name · $coordText · $whenText"
         }
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
-        }
+        showToast(msg)
         updateNotification(msg)
     }
 
@@ -204,21 +238,48 @@ class ExternalNavFollowService : Service() {
         nm.notify(NOTIF_ID, buildNotification(text))
     }
 
+    private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
     private fun playPositionSound() {
         try {
-            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
-            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+            val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 350)
             Handler(Looper.getMainLooper()).postDelayed({
                 try { tg.release() } catch (_: Exception) {}
-            }, 250)
+            }, 450)
         } catch (_: Exception) {
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                if (uri != null) {
+                    val ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        ringtone.audioAttributes = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    }
+                    ringtone.play()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun showToast(msg: String) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {
+            }
         }
     }
 
     private fun createChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(CHANNEL_ID, "Persecución externa", NotificationManager.IMPORTANCE_LOW)
+            val ch = NotificationChannel(CHANNEL_ID, "Persecución externa", NotificationManager.IMPORTANCE_DEFAULT)
             ch.description = "Seguimiento del reloj y apertura de Google Maps"
+            ch.setSound(null, null)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(ch)
         }
@@ -237,7 +298,7 @@ class ExternalNavFollowService : Service() {
         const val ACTION_STOP = "com.yqt.tracker.action.EXTERNAL_FOLLOW_STOP"
         const val EXTRA_DID = "extra_did"
         const val EXTRA_NAME = "extra_name"
-        private const val CHANNEL_ID = "external_follow"
+        private const val CHANNEL_ID = "external_follow_updates"
         private const val NOTIF_ID = 2001
 
         fun start(context: Context, did: String, name: String) {

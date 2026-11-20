@@ -8,8 +8,11 @@ import android.graphics.*
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.media.RingtoneManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -235,12 +238,27 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun playPositionSound() {
         try {
-            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
-            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+            val tg = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 350)
             Handler(Looper.getMainLooper()).postDelayed({
                 try { tg.release() } catch (_: Exception) {}
-            }, 250)
+            }, 450)
         } catch (_: Exception) {
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                if (uri != null) {
+                    val ringtone = RingtoneManager.getRingtone(applicationContext, uri)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                        ringtone.audioAttributes = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    }
+                    ringtone.play()
+                }
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -248,6 +266,20 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (old == null && new == null) return false
         if (old == null || new == null) return new != null
         return GeoUtils.haversineMeters(old.lat, old.lng, new.lat, new.lng) > 1.0
+    }
+
+    private fun selectedSummary(did: String? = selectedDid): String {
+        val st = did?.let { devices[it] } ?: return ""
+        val parts = mutableListOf<String>()
+        parts.add(st.info.name)
+        st.position?.locationType?.let { parts.add(it) }
+        st.position?.battery?.let { parts.add("${it}%") }
+        return "Seleccionado: " + parts.joinToString(" · ")
+    }
+
+    private fun deviceLabel(st: WatchState): String {
+        val bat = st.position?.battery
+        return if (bat != null) "${st.info.name} ${bat}%" else st.info.name
     }
 
     private fun ensureLocationPermission() {
@@ -382,11 +414,12 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private fun selectDevice(did: String) {
         selectedDid = did
         val st = devices[did] ?: return
-        val typeInfo = st.position?.locationType?.let { " · Posición: $it" } ?: ""
-        binding.routeText.text = "Seleccionado: ${st.info.name}$typeInfo"
+        val summary = selectedSummary(did)
+        binding.routeText.text = summary.ifBlank { "Seleccionado: ${st.info.name}" }
         // reset route when target changes
         if (routeTargetDid != did) {
             clearRoute()
+            binding.routeText.text = summary.ifBlank { "Seleccionado: ${st.info.name}" }
         }
         updateDeviceMarkers()
         if (following) {
@@ -402,7 +435,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             val pos = st.position ?: continue
             val selected = did == selectedDid
             val iconId = deviceIconId(did, selected)
-            ensureDeviceIcon(style, did, st.info.name, selected)
+            ensureDeviceIcon(style, did, deviceLabel(st), selected)
             val f = Feature.fromGeometry(Point.fromLngLat(pos.lng, pos.lat))
             f.addStringProperty("did", did)
             f.addStringProperty("icon", iconId)
@@ -410,6 +443,12 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             features.add(f)
         }
         style.getSourceAs<GeoJsonSource>(SRC_DEVICES)?.setGeoJson(FeatureCollection.fromFeatures(features))
+
+        // Si hay dispositivo seleccionado y no estamos mostrando una ruta activa, mantener visible tipo/batería
+        if (selectedDid != null && routeTargetDid == null && !following) {
+            val summary = selectedSummary(selectedDid)
+            if (summary.isNotBlank()) binding.routeText.text = summary
+        }
 
         if (!fitDone) {
             val pts = mutableListOf<LatLng>()
@@ -669,7 +708,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val minInterval = ConsumptionPrefs.rerouteMinIntervalMs(this).coerceAtLeast(2000L)
         if (!force && currentRoute != null && moved < minMove && (now - lastRouteFetchAt) < minInterval) return
         if (routeJob?.isActive == true) return
-        binding.routeText.text = getString(R.string.route_to, st.info.name) + " · recalculando…"
+        val summary = selectedSummary(did)
+        binding.routeText.text = if (summary.isNotBlank()) "$summary · recalculando ruta…" else getString(R.string.route_to, st.info.name) + " · recalculando…"
         routeJob = lifecycleScope.launch {
             val res = withContext(Dispatchers.IO) {
                 try {
@@ -695,8 +735,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         lastSpokenStep = -1
         val pts = route.geometry.map { LatLng(it.first, it.second) }
         updateRouteLayer(pts, dashed = false, color = "#16A34A")
-        val name = devices[did]?.info?.name ?: did
-        binding.routeText.text = getString(R.string.route_to, name) + ": ${GeoUtils.formatDistanceMeters(route.distanceMeters)}, ~${GeoUtils.formatDurationSeconds(route.durationSeconds)}"
+        val summary = selectedSummary(did)
+        val dist = "${GeoUtils.formatDistanceMeters(route.distanceMeters)}, ~${GeoUtils.formatDurationSeconds(route.durationSeconds)}"
+        binding.routeText.text = if (summary.isNotBlank()) "$summary · $dist" else getString(R.string.route_to, devices[did]?.info?.name ?: did) + ": $dist"
         if (following) updateNavigationInstruction()
     }
 
@@ -708,7 +749,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val pts = listOf(me, target)
         updateRouteLayer(pts, dashed = true, color = "#F59E0B")
         val d = GeoUtils.haversineMeters(me.latitude, me.longitude, target.latitude, target.longitude)
-        binding.routeText.text = getString(R.string.route_to, name) + ": ${GeoUtils.formatDistanceMeters(d)} (línea directa)"
+        val summary = selectedSummary(did)
+        val dist = "${GeoUtils.formatDistanceMeters(d)} (línea directa)"
+        binding.routeText.text = if (summary.isNotBlank()) "$summary · $dist" else getString(R.string.route_to, name) + ": $dist"
     }
 
     private fun maybeRerouteForTargetMove() {
@@ -736,7 +779,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             val now = System.currentTimeMillis()
             val minInterval = ConsumptionPrefs.rerouteMinIntervalMs(this).coerceAtLeast(2000L)
             if (off > 60.0 && (now - lastRouteFetchAt) > minInterval) {
-                binding.routeText.text = getString(R.string.rerouting)
+                val summary = selectedSummary()
+                binding.routeText.text = if (summary.isNotBlank()) "$summary · ${getString(R.string.rerouting)}" else getString(R.string.rerouting)
                 requestRoute(force = true)
                 return
             }
