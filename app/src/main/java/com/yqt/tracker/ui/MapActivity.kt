@@ -8,7 +8,10 @@ import android.graphics.*
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.view.Menu
@@ -230,6 +233,23 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.statusText.text = text
     }
 
+    private fun playPositionSound() {
+        try {
+            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { tg.release() } catch (_: Exception) {}
+            }, 250)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun hasPositionChanged(old: com.yqt.tracker.data.WatchPosition?, new: com.yqt.tracker.data.WatchPosition?): Boolean {
+        if (old == null && new == null) return false
+        if (old == null || new == null) return new != null
+        return GeoUtils.haversineMeters(old.lat, old.lng, new.lat, new.lng) > 1.0
+    }
+
     private fun ensureLocationPermission() {
         val fine = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val coarse = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -320,6 +340,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun refreshOnce(force: Boolean) {
         val c = client ?: return
+        val selectedBefore = selectedDid
+        val oldSelectedPos = selectedBefore?.let { devices[it]?.position }
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
                 try {
@@ -338,6 +360,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     st.error?.takeIf { it.isNotBlank() }?.let { "${st.info.name}: $it" }
                 }.distinct()
                 setStatus(if (errs.isEmpty()) base else base + " · " + errs.joinToString(" | "))
+                val sel = selectedBefore
+                if ((following || externalFollowing) && sel != null && hasPositionChanged(oldSelectedPos, states[sel]?.position)) {
+                    playPositionSound()
+                }
                 maybeAutoSelect()
                 if (following) maybeRerouteForTargetMove()
             }.onFailure { e ->
@@ -512,6 +538,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 .build()
             map.cameraPosition = cam
         }
+        playPositionSound()
         requestRoute(force = true)
         startFollowLoop()
     }
@@ -546,6 +573,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.followExternalButton.text = getString(R.string.stop_follow_external)
         try {
             ExternalNavFollowService.start(this, did, st.info.name)
+            playPositionSound()
             Toast.makeText(this, R.string.external_follow_started, Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             externalFollowing = false

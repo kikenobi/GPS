@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -33,6 +35,8 @@ class ExternalNavFollowService : Service() {
     @Volatile private var lastSentLat: Double? = null
     @Volatile private var lastSentLng: Double? = null
     @Volatile private var lastSentAt: Long = 0L
+    @Volatile private var lastKnownLat: Double? = null
+    @Volatile private var lastKnownLng: Double? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -48,6 +52,13 @@ class ExternalNavFollowService : Service() {
                 if (did.isNullOrBlank()) {
                     stopSelf()
                     return START_NOT_STICKY
+                }
+                if (did != targetDid) {
+                    lastSentLat = null
+                    lastSentLng = null
+                    lastSentAt = 0L
+                    lastKnownLat = null
+                    lastKnownLng = null
                 }
                 targetDid = did
                 targetName = name.ifBlank { did }
@@ -104,6 +115,19 @@ class ExternalNavFollowService : Service() {
         val parsed = Protocol.parseLastPosition(resp)
         val lat = parsed.lat ?: return
         val lng = parsed.lng ?: return
+
+        val prevKnownLat = lastKnownLat
+        val prevKnownLng = lastKnownLng
+        val movedFromKnown = if (prevKnownLat != null && prevKnownLng != null) {
+            GeoUtils.haversineMeters(prevKnownLat, prevKnownLng, lat, lng)
+        } else {
+            Double.MAX_VALUE
+        }
+        if (prevKnownLat == null || prevKnownLng == null || movedFromKnown > 1.0) {
+            playPositionSound()
+        }
+        lastKnownLat = lat
+        lastKnownLng = lng
 
         val now = System.currentTimeMillis()
         val prevLat = lastSentLat
@@ -178,6 +202,17 @@ class ExternalNavFollowService : Service() {
     private fun updateNotification(text: String) {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_ID, buildNotification(text))
+    }
+
+    private fun playPositionSound() {
+        try {
+            val tg = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            tg.startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+            Handler(Looper.getMainLooper()).postDelayed({
+                try { tg.release() } catch (_: Exception) {}
+            }, 250)
+        } catch (_: Exception) {
+        }
     }
 
     private fun createChannel() {
