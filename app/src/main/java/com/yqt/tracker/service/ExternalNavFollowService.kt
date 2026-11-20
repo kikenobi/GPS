@@ -9,7 +9,10 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.yqt.tracker.R
 import com.yqt.tracker.network.Protocol
@@ -115,28 +118,43 @@ class ExternalNavFollowService : Service() {
             lastSentLat = lat
             lastSentLng = lng
             lastSentAt = now
-            updateNotification("Destino actualizado: $name (${String.format("%.5f, %.5f", lat, lng)})")
         } else {
             updateNotification("Siguiendo: $name · sin cambios significativos")
         }
     }
 
     private fun openExternalNavigation(lat: Double, lng: Double) {
+        val coordText = String.format("%.5f, %.5f", lat, lng)
         val navUri = Uri.parse("google.navigation:q=$lat,$lng&mode=d")
         val intent = Intent(Intent.ACTION_VIEW, navUri).apply {
             setPackage("com.google.android.apps.maps")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+        var opened = false
+        var mode = "Google Maps"
         try {
             startActivity(intent)
+            opened = true
         } catch (_: Exception) {
             try {
                 val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving&dir_action=navigate")
                 val webIntent = Intent(Intent.ACTION_VIEW, webUri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(webIntent)
+                opened = true
+                mode = "navegador"
             } catch (_: Exception) {
+                opened = false
             }
         }
+        val msg = if (opened) {
+            "Abriendo $mode con destino: $coordText"
+        } else {
+            "No se pudo abrir Google Maps/navegador para: $coordText"
+        }
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, msg, Toast.LENGTH_LONG).show()
+        }
+        updateNotification(msg)
     }
 
     private fun buildNotification(text: String): Notification {
