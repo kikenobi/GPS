@@ -186,31 +186,61 @@ class ExternalNavFollowService : Service() {
 
     private fun openExternalNavigation(lat: Double, lng: Double, coordText: String, name: String, whenText: String) {
         val navUri = Uri.parse("google.navigation:q=$lat,$lng&mode=d")
-        val intent = Intent(Intent.ACTION_VIEW, navUri).apply {
+        val mapsIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
             setPackage("com.google.android.apps.maps")
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        var opened = false
-        var mode = "Google Maps"
-        try {
-            startActivity(intent)
-            opened = true
+
+        val mapsInstalled = try {
+            packageManager.getPackageInfo("com.google.android.apps.maps", 0)
+            true
         } catch (_: Exception) {
+            mapsIntent.resolveActivity(packageManager) != null
+        }
+
+        var opened = false
+        var msg = ""
+
+        if (mapsInstalled) {
             try {
-                val webUri = Uri.parse("https://www.google.com/maps/dir/?api=1&destination=$lat,$lng&travelmode=driving&dir_action=navigate")
-                val webIntent = Intent(Intent.ACTION_VIEW, webUri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(webIntent)
+                startActivity(mapsIntent)
                 opened = true
-                mode = "navegador"
+                msg = "Actualizando Google Maps: $name · $coordText · $whenText"
             } catch (_: Exception) {
-                opened = false
+                try {
+                    val genericIntent = Intent(Intent.ACTION_VIEW, navUri).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    }
+                    startActivity(genericIntent)
+                    opened = true
+                    msg = "Actualizando navegación: $name · $coordText · $whenText"
+                } catch (_: Exception) {
+                    opened = false
+                }
             }
         }
-        val msg = if (opened) {
-            "Abriendo $mode: $name · $coordText · $whenText"
-        } else {
-            "No se pudo abrir Google Maps/navegador: $name · $coordText · $whenText"
+
+        if (!opened) {
+            // Evitar fallback al navegador con navegación automática: en algunos navegadores
+            // aparece un aviso al recibir una nueva URL ("cerrar/salir"). Abrimos destino sin forzar navegación.
+            try {
+                val webUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=$lat,$lng")
+                val webIntent = Intent(Intent.ACTION_VIEW, webUri).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                if (webIntent.resolveActivity(packageManager) != null) {
+                    startActivity(webIntent)
+                    opened = true
+                    msg = "Google Maps no disponible: abierto destino en navegador/app de mapas: $name · $coordText · $whenText"
+                }
+            } catch (_: Exception) {
+            }
         }
+
+        if (!opened) {
+            msg = "No se pudo abrir navegación para: $name · $coordText · $whenText (instala Google Maps)"
+        }
+
         showToast(msg)
         updateNotification(msg)
     }
