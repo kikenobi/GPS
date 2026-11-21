@@ -578,14 +578,38 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun updateBearing(location: Location) {
-        if (location.hasBearing() && (location.speed >= 1.0f || location.hasSpeed())) {
-            gpsBearing = normalizeBearing(location.bearing)
-        } else {
-            val prev = lastFix
-            if (prev != null) {
-                val d = prev.distanceTo(location)
-                if (d > 1.5f) {
-                    gpsBearing = normalizeBearing(prev.bearingTo(location))
+        val speed = if (location.hasSpeed()) location.speed else 0f
+        val prev = lastFix
+        var candidate: Float? = null
+
+        // Preferir rumbo del GPS solo con movimiento fiable; evita giros erráticos parado/lento.
+        if (location.hasBearing() && speed >= 1.5f) {
+            candidate = normalizeBearing(location.bearing)
+        }
+
+        if (candidate == null && prev != null) {
+            val d = prev.distanceTo(location)
+            val minDist = if (speed >= 1.2f) 2.5f else 5.0f
+            if (d >= minDist) {
+                candidate = normalizeBearing(prev.bearingTo(location))
+            }
+        }
+
+        if (candidate != null) {
+            val prevBearing = gpsBearing
+            if (prevBearing == null) {
+                gpsBearing = candidate
+            } else {
+                val delta = abs(bearingDelta(prevBearing, candidate))
+                // A baja velocidad, ignorar saltos grandes de rumbo (ruido GPS).
+                val maxDelta = when {
+                    speed >= 5.0f -> 120f
+                    speed >= 2.0f -> 80f
+                    speed >= 1.0f -> 45f
+                    else -> 25f
+                }
+                if (delta <= maxDelta) {
+                    gpsBearing = smoothBearing(prevBearing, candidate, 0.35f)
                 }
             }
         }
@@ -601,15 +625,15 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun pursuitCameraTilt(info: PursuitInfo): Double =
-        if (info.isActive && pursuit3DMode) 55.0 else 0.0
+        if (info.isActive && pursuit3DMode) 62.0 else 0.0
 
     private fun applyPursuitPadding(active: Boolean) {
         val map = mapLibreMap ?: return
         if (active) {
             val h = binding.map.height.coerceAtLeast(1)
-            // Posición inferior-central: más carretera por delante que por detrás
-            val bottom = (h * if (pursuit3DMode) 0.34f else 0.28f).roundToInt()
-            val top = (h * 0.08f).roundToInt()
+            // Mi ubicación abajo-centrada: padding inferior grande desplaza el target hacia abajo en pantalla
+            val bottom = (h * if (pursuit3DMode) 0.46f else 0.38f).roundToInt()
+            val top = (h * 0.04f).roundToInt()
             map.setPadding(0, top, 0, bottom)
         } else {
             map.setPadding(0, 0, 0, 0)
@@ -951,6 +975,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         ensureNotificationPermission()
         val profile = PursuitPrefs.travelProfile(this)
         followCamera = true
+        pursuit3DMode = true
+        updateViewModeButton()
         lastSmoothedZoom = null
         applyPursuitPadding(true)
         updateNavOverlay()
