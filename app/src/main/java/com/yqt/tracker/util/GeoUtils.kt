@@ -19,17 +19,48 @@ object GeoUtils {
     }
 
     fun distanceToPolylineMeters(lat: Double, lon: Double, poly: List<Pair<Double, Double>>): Double {
-        if (poly.size < 2) return Double.MAX_VALUE
-        var best = Double.MAX_VALUE
-        for (i in 0 until poly.size - 1) {
-            val d = distanceToSegmentMeters(lat, lon, poly[i].first, poly[i].second, poly[i + 1].first, poly[i + 1].second)
-            if (d < best) best = d
-        }
-        return best
+        return nearestPointOnPolylineWithDistance(lat, lon, poly)?.second ?: Double.MAX_VALUE
     }
 
-    // approximate point-to-segment distance in meters using equirectangular projection
-    private fun distanceToSegmentMeters(pLat: Double, pLon: Double, aLat: Double, aLon: Double, bLat: Double, bLon: Double): Double {
+    /**
+     * Punto más cercano sobre una polilínea (proyección sobre el segmento más próximo) y su distancia en metros.
+     * Útil para ajustar visualmente la posición al trazado de la ruta/carretera.
+     */
+    fun nearestPointOnPolylineWithDistance(
+        lat: Double,
+        lon: Double,
+        poly: List<Pair<Double, Double>>,
+    ): Pair<Pair<Double, Double>, Double>? {
+        if (poly.isEmpty()) return null
+        if (poly.size == 1) {
+            val p = poly[0]
+            return Pair(p, haversineMeters(lat, lon, p.first, p.second))
+        }
+        var bestPoint = poly[0]
+        var bestDist = Double.MAX_VALUE
+        for (i in 0 until poly.size - 1) {
+            val (pt, d) = nearestPointOnSegment(lat, lon, poly[i].first, poly[i].second, poly[i + 1].first, poly[i + 1].second)
+            if (d < bestDist) {
+                bestDist = d
+                bestPoint = pt
+            }
+        }
+        return Pair(bestPoint, bestDist)
+    }
+
+    fun nearestPointOnPolyline(lat: Double, lon: Double, poly: List<Pair<Double, Double>>): Pair<Double, Double>? {
+        return nearestPointOnPolylineWithDistance(lat, lon, poly)?.first
+    }
+
+    // approximate point-to-segment projection/distance in meters using equirectangular projection
+    private fun nearestPointOnSegment(
+        pLat: Double,
+        pLon: Double,
+        aLat: Double,
+        aLon: Double,
+        bLat: Double,
+        bLon: Double,
+    ): Pair<Pair<Double, Double>, Double> {
         val refLat = Math.toRadians((aLat + bLat + pLat) / 3.0)
         fun x(lat: Double, lon: Double) = Math.toRadians(lon) * cos(refLat) * 6371000.0
         fun y(lat: Double, lon: Double) = Math.toRadians(lat) * 6371000.0
@@ -40,9 +71,11 @@ object GeoUtils {
         val apx = px - ax; val apy = py - ay
         val ab2 = abx * abx + aby * aby
         val t = if (ab2 <= 0.0) 0.0 else ((apx * abx + apy * aby) / ab2).coerceIn(0.0, 1.0)
+        val projLat = aLat + t * (bLat - aLat)
+        val projLon = aLon + t * (bLon - aLon)
         val cx = ax + t * abx; val cy = ay + t * aby
         val dx = px - cx; val dy = py - cy
-        return sqrt(dx * dx + dy * dy)
+        return Pair(Pair(projLat, projLon), sqrt(dx * dx + dy * dy))
     }
 
     fun fetchRoute(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): RouteInfo? =

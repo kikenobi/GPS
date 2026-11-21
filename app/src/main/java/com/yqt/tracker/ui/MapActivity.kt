@@ -127,10 +127,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.myLocationButton.setOnClickListener { centerOnMe() }
         binding.recenterButton.setOnClickListener {
             followCamera = true
-            val me = myLocation
-            val map = mapLibreMap
-            if (me != null && map != null) {
-                map.animateCamera(CameraUpdateFactory.newLatLng(me))
+            val info = PursuitForegroundService.state.value
+            val target = displayedMyLocation(info)
+            if (target != null) {
+                if (info.isActive) {
+                    animateToPursuitCamera(target, info)
+                } else {
+                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLng(target))
+                }
             }
         }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
@@ -360,18 +364,23 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         updateBearing(location)
         myLocation = LatLng(location.latitude, location.longitude)
         mySpeedMps = if (location.hasSpeed()) location.speed else null
+        val pursuit = PursuitForegroundService.state.value
         updateMyMarker()
         updateUserSpeedUi()
 
-        val pursuit = PursuitForegroundService.state.value
-        if (pursuit.isActive && followCamera) {
-            mapLibreMap?.let { map ->
-                val cam = CameraPosition.Builder(map.cameraPosition)
-                    .target(LatLng(location.latitude, location.longitude))
-                    .bearing(userBearing.toDouble())
-                    .zoom(max(map.cameraPosition.zoom, 16.0))
-                    .build()
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+        if (followCamera) {
+            val target = displayedMyLocation(pursuit) ?: LatLng(location.latitude, location.longitude)
+            if (pursuit.isActive) {
+                animateToPursuitCamera(target, pursuit)
+            } else {
+                mapLibreMap?.let { map ->
+                    val cam = CameraPosition.Builder(map.cameraPosition)
+                        .target(target)
+                        .zoom(max(map.cameraPosition.zoom, 16.0))
+                        .tilt(0.0)
+                        .build()
+                    map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+                }
             }
         }
     }
@@ -388,9 +397,35 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         lastFix = location
     }
 
+    private fun displayedMyLocation(info: PursuitInfo = PursuitForegroundService.state.value): LatLng? {
+        val real = myLocation ?: return null
+        val useSnap = info.isActive && (info.profile == TravelProfile.CAR || info.profile == TravelProfile.MOTORCYCLE)
+        if (!useSnap) return real
+        val route = info.route ?: return real
+        val snapped = GeoUtils.nearestPointOnPolyline(real.latitude, real.longitude, route.geometry) ?: return real
+        return LatLng(snapped.first, snapped.second)
+    }
+
+    private fun pursuitCameraTilt(info: PursuitInfo = PursuitForegroundService.state.value): Double =
+        if (info.isActive) 50.0 else 0.0
+
+    private fun animateToPursuitCamera(target: LatLng, info: PursuitInfo = PursuitForegroundService.state.value) {
+        val map = mapLibreMap ?: return
+        val zoom = max(map.cameraPosition.zoom, 17.0)
+        val builder = CameraPosition.Builder(map.cameraPosition)
+            .target(target)
+            .zoom(zoom)
+        if (info.isActive) {
+            builder.bearing(userBearing.toDouble()).tilt(pursuitCameraTilt(info))
+        } else {
+            builder.tilt(0.0)
+        }
+        map.animateCamera(CameraUpdateFactory.newCameraPosition(builder.build()))
+    }
+
     private fun updateMyMarker() {
         val style = mapStyle ?: return
-        val me = myLocation
+        val me = displayedMyLocation()
         val features = if (me != null) {
             arrayOf(Feature.fromGeometry(Point.fromLngLat(me.longitude, me.latitude)))
         } else {
@@ -400,12 +435,22 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun centerOnMe() {
-        val me = myLocation
         val map = mapLibreMap
+        val info = PursuitForegroundService.state.value
+        val me = displayedMyLocation(info)
         if (me != null && map != null) {
             followCamera = true
             val zoom = if (map.cameraPosition.zoom < 16.0) 16.0 else map.cameraPosition.zoom
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(me, zoom))
+            if (info.isActive) {
+                animateToPursuitCamera(me, info)
+            } else {
+                val cam = CameraPosition.Builder(map.cameraPosition)
+                    .target(me)
+                    .zoom(zoom)
+                    .tilt(0.0)
+                    .build()
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+            }
         } else {
             Toast.makeText(this, R.string.location_permission_needed, Toast.LENGTH_SHORT).show()
         }
@@ -691,13 +736,20 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
         // Ruta en mapa: preferir ruta del controlador de persecución
         val route = info.route
+        val me = displayedMyLocation(info) ?: myLocation
         if (info.isActive && route != null) {
             val pts = route.geometry.map { LatLng(it.first, it.second) }
-            updateRouteLayer(pts, dashed = false, color = "#16A34A")
-        } else if (info.isActive && info.lastKnownTrackerPosition != null && myLocation != null) {
+            val walking = info.profile == TravelProfile.WALKING
+            updateRouteLayer(
+                pts,
+                dashed = walking,
+                color = if (walking) "#0EA5E9" else "#16A34A",
+                dotted = walking,
+            )
+        } else if (info.isActive && info.lastKnownTrackerPosition != null && me != null) {
             // sin ruta válida: línea directa (indicativa)
             val t = info.lastKnownTrackerPosition!!
-            updateRouteLayer(listOf(myLocation!!, LatLng(t.latitude, t.longitude)), dashed = true, color = "#F59E0B")
+            updateRouteLayer(listOf(me, LatLng(t.latitude, t.longitude)), dashed = true, color = "#F59E0B")
         } else if (!info.isActive) {
             if (info.state == PursuitState.STOPPED) {
                 // mantener última visualización simple
@@ -710,7 +762,27 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             info.trackerId?.let { if (selectedDid != it) selectedDid = it }
         }
 
+        val wasActive = lastPursuitState?.let { it != PursuitState.IDLE && it != PursuitState.STOPPED } == true
+        if (wasActive && !info.isActive) {
+            // Salir de modo persecución: volver a vista cenital (plano normal)
+            mapLibreMap?.let { map ->
+                val target = myLocation ?: map.cameraPosition.target
+                val cam = CameraPosition.Builder(map.cameraPosition)
+                    .target(target)
+                    .tilt(0.0)
+                    .bearing(0.0)
+                    .build()
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+            }
+        }
+
         updateLastUpdateAge(info)
+        updateMyMarker()
+        if (info.isActive && followCamera) {
+            val target = displayedMyLocation(info)
+            if (target != null) animateToPursuitCamera(target, info)
+        }
+        lastPursuitState = info.state
     }
 
     private fun updateUserSpeedUi() {
@@ -754,7 +826,12 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return String.format(Locale.getDefault(), "%.1f km/h", kmh)
     }
 
-    private fun updateRouteLayer(points: List<LatLng> = emptyList(), dashed: Boolean = false, color: String = "#16A34A") {
+    private fun updateRouteLayer(
+        points: List<LatLng> = emptyList(),
+        dashed: Boolean = false,
+        color: String = "#16A34A",
+        dotted: Boolean = false,
+    ) {
         val style = mapStyle ?: return
         val source = style.getSourceAs<GeoJsonSource>(SRC_ROUTE) ?: return
         if (points.size >= 2) {
@@ -771,7 +848,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
         )
-        if (dashed) builder.withProperties(PropertyFactory.lineDasharray(arrayOf(2f, 1.5f)))
+        when {
+            dotted -> builder.withProperties(PropertyFactory.lineDasharray(arrayOf(1f, 2f)))
+            dashed -> builder.withProperties(PropertyFactory.lineDasharray(arrayOf(2f, 1.5f)))
+        }
         if (style.getLayer(LAYER_DEVICES) != null) style.addLayerBelow(builder, LAYER_DEVICES) else style.addLayer(builder)
     }
 
