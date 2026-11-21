@@ -45,8 +45,12 @@ object GeoUtils {
         return sqrt(dx * dx + dy * dy)
     }
 
-    fun fetchRoute(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): RouteInfo? {
-        val url = "https://router.project-osrm.org/route/v1/driving/" +
+    fun fetchRoute(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double): RouteInfo? =
+        fetchRoute(fromLat, fromLon, toLat, toLon, "driving")
+
+    fun fetchRoute(fromLat: Double, fromLon: Double, toLat: Double, toLon: Double, osrmProfile: String): RouteInfo? {
+        val profile = osrmProfile.ifBlank { "driving" }
+        val url = "https://router.project-osrm.org/route/v1/$profile/" +
             "$fromLon,$fromLat;$toLon,$toLat?overview=full&geometries=geojson&steps=true"
         val req = Request.Builder().url(url).get().build()
         http.newCall(req).execute().use { resp ->

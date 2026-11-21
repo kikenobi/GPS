@@ -14,7 +14,7 @@
         app:title="@string/app_name" />
 
     <LinearLayout
-        android:id="@+id/infoBar"
+        android:id="@+id/topPanel"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="#111827"
@@ -26,8 +26,18 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textColor="#E5E7EB"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:text="Iniciando…" />
+
+        <TextView
+            android:id="@+id/nextManeuverText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:text=""
+            android:paddingTop="2dp" />
 
         <TextView
             android:id="@+id/routeText"
@@ -41,12 +51,36 @@
             android:id="@+id/navInstructionText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="#FFFFFF"
-            android:textSize="15sp"
-            android:textStyle="bold"
+            android:textColor="#D1FAE5"
+            android:textSize="13sp"
             android:paddingTop="2dp"
             android:visibility="gone"
             android:text="" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="2dp">
+
+            <TextView
+                android:id="@+id/straightDistanceText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#FCD34D"
+                android:textSize="12sp"
+                android:text="Recta: -" />
+
+            <TextView
+                android:id="@+id/routeDistanceText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#6EE7B7"
+                android:textSize="12sp"
+                android:text="Ruta: -" />
+        </LinearLayout>
     </LinearLayout>
 
     <FrameLayout
@@ -59,36 +93,168 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/myLocationButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_margin="12dp"
+            android:contentDescription="@string/my_location"
+            app:srcCompat="@android:drawable/ic_menu_mylocation" />
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/recenterButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|end"
+            android:layout_marginTop="76dp"
+            android:layout_marginEnd="12dp"
+            android:contentDescription="Centrar seguimiento"
+            app:srcCompat="@android:drawable/ic_menu_compass" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/bottomPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#1F2937"
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/userSpeedText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#E5E7EB"
+                android:textSize="12sp"
+                android:text="Tu vel.: -" />
+
+            <TextView
+                android:id="@+id/trackerSpeedText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#E5E7EB"
+                android:textSize="12sp"
+                android:text="Vel. tracker: -" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/trackerHeadingText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#E5E7EB"
+                android:textSize="12sp"
+                android:text="Rumbo: -" />
+
+            <TextView
+                android:id="@+id/etaText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#E5E7EB"
+                android:textSize="12sp"
+                android:text="ETA: -" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/lastUpdateAgeText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#FCA5A5"
+                android:textSize="12sp"
+                android:text="Antigüedad: -" />
+
+            <TextView
+                android:id="@+id/connectionStateText"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="#A7F3D0"
+                android:textSize="12sp"
+                android:text="Estado: -" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fillViewport="true"
+        android:background="#111827">
+
         <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="bottom|end"
-            android:orientation="vertical"
-            android:padding="12dp">
+            android:orientation="horizontal"
+            android:padding="8dp"
+            android:gravity="center_vertical">
 
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/startPursuitButton"
+                style="@style/Widget.Material3.Button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Iniciar persecución" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stopPursuitButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Detener" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/profileButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Coche" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/voiceToggleButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="Voz: ON" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/followExternalButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp"
-                android:text="@string/follow_external"
-                app:icon="@android:drawable/ic_dialog_map" />
+                android:layout_marginStart="8dp"
+                android:text="@string/follow_external" />
 
-            <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/followButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="8dp"
+                android:layout_marginStart="8dp"
                 android:text="@string/follow"
-                app:icon="@android:drawable/ic_menu_directions" />
-
-            <com.google.android.material.floatingactionbutton.FloatingActionButton
-                android:id="@+id/myLocationButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:contentDescription="@string/my_location"
-                app:srcCompat="@android:drawable/ic_menu_mylocation" />
+                android:visibility="gone" />
         </LinearLayout>
-    </FrameLayout>
+    </HorizontalScrollView>
 
 </LinearLayout>
