@@ -97,6 +97,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private var lastPursuitState: PursuitState? = null
     private var suppressDeviceSelectionCallback = false
     private var lastCameraUpdateAt = 0L
+    private var pursuit3DMode = true
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
@@ -151,7 +152,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
         binding.profileButton.setOnClickListener { cycleTravelProfile() }
         binding.voiceToggleButton.setOnClickListener { toggleVoice() }
+        binding.viewModeButton.setOnClickListener { toggleViewMode() }
         updateVoiceButton()
+        updateViewModeButton()
         updatePursuitToggleButton(PursuitForegroundService.state.value)
 
         setupDeviceDropdown()
@@ -597,14 +600,16 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return LatLng(snapped.first, snapped.second)
     }
 
-    private fun pursuitCameraTilt(info: PursuitInfo): Double = if (info.isActive) 55.0 else 0.0
+    private fun pursuitCameraTilt(info: PursuitInfo): Double =
+        if (info.isActive && pursuit3DMode) 55.0 else 0.0
 
     private fun applyPursuitPadding(active: Boolean) {
         val map = mapLibreMap ?: return
         if (active) {
             val h = binding.map.height.coerceAtLeast(1)
-            val bottom = (h * 0.30f).roundToInt()
-            val top = (h * 0.10f).roundToInt()
+            // Posición inferior-central: más carretera por delante que por detrás
+            val bottom = (h * if (pursuit3DMode) 0.34f else 0.28f).roundToInt()
+            val top = (h * 0.08f).roundToInt()
             map.setPadding(0, top, 0, bottom)
         } else {
             map.setPadding(0, 0, 0, 0)
@@ -615,21 +620,46 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val speed = (mySpeedMps ?: 0f).toDouble().coerceAtLeast(0.0)
         val zoom = when (info.profile) {
             TravelProfile.WALKING -> {
-                // Parado/lento -> más cerca; rápido -> algo más lejos
                 val t = (speed / 2.0).coerceIn(0.0, 1.0)
-                20.0 - (1.5 * t) // 20.0 lento -> 18.5 rápido
+                18.8 - (1.0 * t) // ~18 lento -> ~17.8 rápido
             }
             TravelProfile.CAR -> {
-                // Parado/lento -> 20.0, rápido -> 18.0
+                // Zoom aprox. 18, ajustable por velocidad
                 val fastSpeed = 13.9 // ~50 km/h
                 val t = (speed / fastSpeed).coerceIn(0.0, 1.0)
-                20.0 - (2.0 * t)
+                18.8 - (1.6 * t) // lento/parado ~18.8 -> rápido ~17.2
             }
         }
         val prev = lastSmoothedZoom ?: zoom
         val smoothed = prev + (zoom - prev) * 0.20
         lastSmoothedZoom = smoothed
-        return smoothed.coerceIn(16.0, 20.5)
+        return smoothed.coerceIn(15.5, 20.5)
+    }
+
+    private fun toggleViewMode() {
+        pursuit3DMode = !pursuit3DMode
+        updateViewModeButton()
+        val info = PursuitForegroundService.state.value
+        val target = displayedMyLocation(info) ?: myLocation ?: mapLibreMap?.cameraPosition?.target
+        if (target != null) {
+            if (info.isActive) {
+                animateToPursuitCamera(target, info)
+            } else {
+                val map = mapLibreMap ?: return
+                val cam = CameraPosition.Builder(map.cameraPosition)
+                    .target(target)
+                    .tilt(0.0)
+                    .bearing(0.0)
+                    .build()
+                applyPursuitPadding(false)
+                map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+                updateZoomIndicator(cam.zoom)
+            }
+        }
+    }
+
+    private fun updateViewModeButton() {
+        binding.viewModeButton.text = if (pursuit3DMode) "3D" else "2D"
     }
 
     private fun animateToPursuitCamera(target: LatLng, info: PursuitInfo = PursuitForegroundService.state.value) {
