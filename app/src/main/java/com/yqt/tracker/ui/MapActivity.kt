@@ -134,17 +134,25 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
             ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
 
-        binding.myLocationButton.setOnClickListener { centerOnMe() }
-        binding.recenterButton.setOnClickListener { recenterCamera() }
+        binding.myLocationButton.setOnClickListener { recenterCamera() }
         binding.centerDeviceButton.setOnClickListener { centerOnSelectedDevice(zoomIn = true) }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
         binding.followButton.setOnClickListener { /* compatibilidad */ }
 
-        binding.startPursuitButton.setOnClickListener { startPursuitForSelected() }
-        binding.stopPursuitButton.setOnClickListener { confirmStopPursuit() }
+        binding.startPursuitButton.setOnClickListener { togglePursuit() }
+        binding.recenterNavButton.setOnClickListener {
+            followCamera = true
+            updateNavOverlay()
+            val info = PursuitForegroundService.state.value
+            val target = displayedMyLocation(info) ?: myLocation
+            if (target != null) {
+                if (info.isActive) animateToPursuitCamera(target, info) else animateToNormalTarget(target, 16.5)
+            }
+        }
         binding.profileButton.setOnClickListener { cycleTravelProfile() }
         binding.voiceToggleButton.setOnClickListener { toggleVoice() }
         updateVoiceButton()
+        updatePursuitToggleButton(PursuitForegroundService.state.value)
 
         setupDeviceDropdown()
 
@@ -154,6 +162,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             map.addOnCameraMoveStartedListener { reason ->
                 if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
                     followCamera = false
+                    updateNavOverlay()
                 }
             }
             map.setStyle(Style.Builder().fromUri(STYLE_URL)) { style ->
@@ -605,6 +614,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun recenterCamera() {
         followCamera = true
+        updateNavOverlay()
         val info = PursuitForegroundService.state.value
         val target = displayedMyLocation(info) ?: myLocation
         if (target != null) {
@@ -622,6 +632,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             return
         }
         followCamera = true
+        updateNavOverlay()
         if (info.isActive) animateToPursuitCamera(me, info) else animateToNormalTarget(me, 17.0)
     }
 
@@ -646,6 +657,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             return
         }
         followCamera = false
+        updateNavOverlay()
         val target = LatLng(pos.lat, pos.lng)
         val zoom = if (zoomIn) 17.5 else 15.5
         animateToNormalTarget(target, zoom)
@@ -846,6 +858,15 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return bmp
     }
 
+    private fun togglePursuit() {
+        val info = PursuitForegroundService.state.value
+        if (info.isActive) {
+            confirmStopPursuit()
+        } else {
+            startPursuitForSelected()
+        }
+    }
+
     private fun startPursuitForSelected() {
         val did = selectedDid
         val st = did?.let { devices[it] }
@@ -859,6 +880,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         followCamera = true
         lastSmoothedZoom = null
         applyPursuitPadding(true)
+        updateNavOverlay()
         PursuitForegroundService.startPursuit(this, did, st.info.name, profile)
         Toast.makeText(this, "Persecución iniciada (${profileLabel(profile)})", Toast.LENGTH_SHORT).show()
     }
@@ -903,6 +925,16 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private fun updateVoiceButton() {
         binding.voiceToggleButton.text = if (PursuitPrefs.voiceEnabled(this)) "Voz: ON" else "Voz: OFF"
         binding.profileButton.text = profileLabel(PursuitPrefs.travelProfile(this))
+    }
+
+    private fun updatePursuitToggleButton(info: PursuitInfo = PursuitForegroundService.state.value) {
+        binding.startPursuitButton.text = if (info.isActive) "Detener persecución" else "Iniciar persecución"
+    }
+
+    private fun updateNavOverlay() {
+        val info = PursuitForegroundService.state.value
+        val show = info.isActive && !followCamera
+        binding.recenterNavButton.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     private fun renderPursuitInfo(info: PursuitInfo) {
@@ -1027,6 +1059,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
         updateLastUpdateAge(info)
         updateMyMarker()
+        updatePursuitToggleButton(info)
+        updateNavOverlay()
         if (info.isActive && followCamera) {
             val target = displayedMyLocation(info)
             if (target != null) animateToPursuitCamera(target, info)
