@@ -209,8 +209,8 @@ class PursuitForegroundService : Service(), LocationListener, TextToSpeech.OnIni
             when (info.state) {
                 PursuitState.TRACKER_SIGNAL_LOST -> speak("Se ha perdido la señal de $name. Se mantiene la última posición conocida.")
                 PursuitState.RECOVERING_CONNECTION, PursuitState.PURSUING -> if (lastSpokenState == PursuitState.TRACKER_SIGNAL_LOST) speak("Se ha recuperado la señal de $name.")
-                PursuitState.TRACKER_NEARBY -> speak("Estás cerca de $name. La persecución continúa.")
-                PursuitState.TRACKER_STATIONARY -> speak("$name parece detenido. La persecución continúa.")
+                PursuitState.TRACKER_NEARBY -> speak("Estás cerca de $name.")
+                PursuitState.TRACKER_STATIONARY -> speak("$name parece detenido.")
                 else -> {}
             }
             lastSpokenState = info.state
