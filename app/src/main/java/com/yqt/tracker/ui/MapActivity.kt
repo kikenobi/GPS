@@ -1,10 +1,14 @@
-package com.yqt.tracker.ui
+﻿package com.yqt.tracker.ui
 
 import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.*
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -15,6 +19,7 @@ import android.speech.tts.TextToSpeech
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -22,7 +27,6 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.yqt.tracker.R
-import com.yqt.tracker.consumption.ConsumptionPrefs
 import com.yqt.tracker.consumption.ui.ConsumptionActivity
 import com.yqt.tracker.data.RouteInfo
 import com.yqt.tracker.data.WatchState
@@ -30,7 +34,6 @@ import com.yqt.tracker.databinding.ActivityMapBinding
 import com.yqt.tracker.network.YqtClient
 import com.yqt.tracker.pursuit.PursuitInfo
 import com.yqt.tracker.pursuit.PursuitState
-import com.yqt.tracker.pursuit.UserPosition
 import com.yqt.tracker.routing.TravelProfile
 import com.yqt.tracker.service.ExternalNavFollowService
 import com.yqt.tracker.service.PursuitForegroundService
@@ -55,10 +58,9 @@ import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.max
-import kotlin.math.roundToInt
+import kotlin.math.*
 
-class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitListener {
+class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitListener, SensorEventListener {
     private lateinit var binding: ActivityMapBinding
     private var client: YqtClient? = null
 
@@ -72,27 +74,29 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private var refreshJob: Job? = null
     private var uiTickJob: Job? = null
-    private var routeJob: Job? = null
-    private var followJob: Job? = null
 
-    // Modo integrado antiguo (compatibilidad básica)
-    private var following = false
     private var externalFollowing = false
-    private var currentRoute: RouteInfo? = null
-    private var routeTargetDid: String? = null
-    private var routeTargetPoint: LatLng? = null
-    private var lastRouteFetchAt = 0L
-    private var currentStepIndex = 0
-    private var lastSpokenStep = -1
-
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var fitDone = false
-    private var userBearing: Float = 0f
+
+    // Rumbo
+    private var gpsBearing: Float? = null
+    private var sensorBearing: Float? = null
+    private var fusedBearing: Float = 0f
     private var lastFix: Location? = null
+    private var lastSmoothedZoom: Double? = null
+
+    // Sensores de orientación
+    private var sensorManager: SensorManager? = null
+    private var rotationSensor: Sensor? = null
+    private var accelValues: FloatArray? = null
+    private var magnetValues: FloatArray? = null
 
     private var followCamera = true
     private var lastPursuitState: PursuitState? = null
+    private var suppressDeviceSelectionCallback = false
+    private var lastCameraUpdateAt = 0L
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
@@ -106,7 +110,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         private const val LAYER_ME = "me-layer"
         private const val SRC_ROUTE = "route-source"
         private const val LAYER_ROUTE = "route-layer"
+        private const val SRC_FOOT = "foot-source"
+        private const val LAYER_FOOT = "foot-layer"
         private const val IMG_ME = "me-icon"
+        private const val FOOT_THRESHOLD_METERS = 20.0
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -123,28 +130,23 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         client = YqtClient(this, creds.first, creds.second, creds.third)
 
         tts = TextToSpeech(this, this)
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        rotationSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+            ?: sensorManager?.getDefaultSensor(Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR)
 
         binding.myLocationButton.setOnClickListener { centerOnMe() }
-        binding.recenterButton.setOnClickListener {
-            followCamera = true
-            val info = PursuitForegroundService.state.value
-            val target = displayedMyLocation(info)
-            if (target != null) {
-                if (info.isActive) {
-                    animateToPursuitCamera(target, info)
-                } else {
-                    mapLibreMap?.animateCamera(CameraUpdateFactory.newLatLng(target))
-                }
-            }
-        }
+        binding.recenterButton.setOnClickListener { recenterCamera() }
+        binding.centerDeviceButton.setOnClickListener { centerOnSelectedDevice(zoomIn = true) }
         binding.followExternalButton.setOnClickListener { toggleExternalFollow() }
-        binding.followButton.setOnClickListener { /* modo antiguo oculto; conservado por compatibilidad */ }
+        binding.followButton.setOnClickListener { /* compatibilidad */ }
 
         binding.startPursuitButton.setOnClickListener { startPursuitForSelected() }
         binding.stopPursuitButton.setOnClickListener { confirmStopPursuit() }
         binding.profileButton.setOnClickListener { cycleTravelProfile() }
         binding.voiceToggleButton.setOnClickListener { toggleVoice() }
         updateVoiceButton()
+
+        setupDeviceDropdown()
 
         binding.map.onCreate(savedInstanceState)
         binding.map.getMapAsync { map ->
@@ -180,14 +182,51 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         startUiTicker()
     }
 
+    private fun setupDeviceDropdown() {
+        binding.deviceSelector.setOnItemClickListener { _, _, position, _ ->
+            if (suppressDeviceSelectionCallback) return@setOnItemClickListener
+            val entries = currentDeviceEntries()
+            val entry = entries.getOrNull(position) ?: return@setOnItemClickListener
+            selectDevice(entry.first, fromDropdown = true)
+        }
+    }
+
+    private data class DeviceEntry(val did: String, val label: String)
+
+    private fun currentDeviceEntries(): List<DeviceEntry> {
+        return devices.values
+            .sortedBy { it.info.name.lowercase(Locale.getDefault()) }
+            .map { st ->
+                val pos = st.position
+                val label = buildString {
+                    append(st.info.name)
+                    if (pos?.battery != null) append(" · ${pos.battery}%")
+                    if (pos?.locationType != null) append(" · ${pos.locationType}")
+                }
+                DeviceEntry(st.info.did, label)
+            }
+    }
+
+    private fun refreshDeviceDropdown() {
+        val entries = currentDeviceEntries()
+        val labels = entries.map { it.label }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, labels)
+        suppressDeviceSelectionCallback = true
+        binding.deviceSelector.setAdapter(adapter)
+        val selectedLabel = entries.firstOrNull { it.did == selectedDid }?.label
+        if (selectedLabel != null) {
+            binding.deviceSelector.setText(selectedLabel, false)
+        } else if (binding.deviceSelector.text?.isNotEmpty() == true) {
+            binding.deviceSelector.setText("", false)
+        }
+        suppressDeviceSelectionCallback = false
+    }
+
     private fun observePursuitState() {
         lifecycleScope.launch {
             PursuitForegroundService.state.collect { info ->
                 renderPursuitInfo(info)
             }
-        }
-        lifecycleScope.launch {
-            PursuitForegroundService.trackerName.collect { /* nombre disponible si se requiere */ }
         }
     }
 
@@ -214,6 +253,19 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
                     PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
                 )
+            )
+        }
+        if (style.getSource(SRC_FOOT) == null) {
+            style.addSource(GeoJsonSource(SRC_FOOT, FeatureCollection.fromFeatures(emptyArray())))
+            style.addLayerAbove(
+                LineLayer(LAYER_FOOT, SRC_FOOT).withProperties(
+                    PropertyFactory.lineColor(Color.parseColor("#F59E0B")),
+                    PropertyFactory.lineWidth(4f),
+                    PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
+                    PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND),
+                    PropertyFactory.lineDasharray(arrayOf(1.5f, 1.5f))
+                ),
+                LAYER_ROUTE
             )
         }
         if (style.getSource(SRC_DEVICES) == null) {
@@ -257,7 +309,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         menu.add(0, 3, 1, R.string.consumption_control)
         menu.add(0, 4, 2, "Intervalo actualización")
         menu.add(0, 5, 3, "Alertas de proximidad")
-        menu.add(0, 2, 4, R.string.logout)
+        menu.add(0, 6, 4, "Ver todos")
+        menu.add(0, 2, 5, R.string.logout)
         return true
     }
 
@@ -267,6 +320,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             3 -> { startActivity(Intent(this, ConsumptionActivity::class.java)); true }
             4 -> { showIntervalDialog(); true }
             5 -> { showProximityAlertsDialog(); true }
+            6 -> { fitAllDevices(animated = true); true }
             2 -> { logout(); true }
             else -> super.onOptionsItemSelected(item)
         }
@@ -360,43 +414,139 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
     }
 
+    private fun startSensorUpdates() {
+        val sm = sensorManager ?: return
+        val rot = rotationSensor
+        if (rot != null) {
+            sm.registerListener(this, rot, SensorManager.SENSOR_DELAY_UI)
+        } else {
+            sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+            sm.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let { sm.registerListener(this, it, SensorManager.SENSOR_DELAY_UI) }
+        }
+    }
+
+    private fun stopSensorUpdates() {
+        try { sensorManager?.unregisterListener(this) } catch (_: Exception) {}
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        when (event.sensor.type) {
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR -> {
+                val rotMat = FloatArray(9)
+                SensorManager.getRotationMatrixFromVector(rotMat, event.values)
+                val orient = FloatArray(3)
+                SensorManager.getOrientation(rotMat, orient)
+                val azimuthDeg = Math.toDegrees(orient[0].toDouble()).toFloat()
+                val bearing = normalizeBearing(azimuthDeg)
+                sensorBearing = smoothBearing(sensorBearing, bearing, 0.15f)
+            }
+            Sensor.TYPE_ACCELEROMETER -> accelValues = event.values.clone()
+            Sensor.TYPE_MAGNETIC_FIELD -> magnetValues = event.values.clone()
+        }
+        if (event.sensor.type == Sensor.TYPE_ACCELEROMETER || event.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+            val acc = accelValues
+            val mag = magnetValues
+            if (acc != null && mag != null) {
+                val r = FloatArray(9)
+                val i = FloatArray(9)
+                if (SensorManager.getRotationMatrix(r, i, acc, mag)) {
+                    val orient = FloatArray(3)
+                    SensorManager.getOrientation(r, orient)
+                    val bearing = normalizeBearing(Math.toDegrees(orient[0].toDouble()).toFloat())
+                    sensorBearing = smoothBearing(sensorBearing, bearing, 0.12f)
+                }
+            }
+        }
+        updateFusedBearing()
+        maybeUpdateCameraFromSensor()
+    }
+
+    private fun maybeUpdateCameraFromSensor() {
+        val info = PursuitForegroundService.state.value
+        if (!info.isActive || !followCamera) return
+        val now = System.currentTimeMillis()
+        if (now - lastCameraUpdateAt < 250L) return
+        val target = displayedMyLocation(info) ?: return
+        lastCameraUpdateAt = now
+        animateToPursuitCamera(target, info)
+    }
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    private fun normalizeBearing(b: Float): Float {
+        var v = b % 360f
+        if (v < 0f) v += 360f
+        return v
+    }
+
+    private fun smoothBearing(current: Float?, target: Float, alpha: Float): Float {
+        if (current == null) return target
+        var diff = target - current
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        return normalizeBearing(current + diff * alpha)
+    }
+
+    private fun updateFusedBearing() {
+        val speed = mySpeedMps ?: 0f
+        val gps = gpsBearing
+        val sensor = sensorBearing
+        val target = when {
+            gps != null && speed >= 1.5f -> gps
+            sensor != null && speed < 1.5f -> sensor
+            gps != null && sensor != null -> {
+                val t = ((speed - 0.8f) / 0.7f).coerceIn(0f, 1f)
+                val diff = bearingDelta(sensor, gps)
+                normalizeBearing(sensor + diff * t)
+            }
+            gps != null -> gps
+            sensor != null -> sensor
+            else -> fusedBearing
+        }
+        fusedBearing = smoothBearing(fusedBearing, target, if (speed >= 1.5f) 0.25f else 0.18f)
+    }
+
+    private fun bearingDelta(from: Float, to: Float): Float {
+        var diff = to - from
+        if (diff > 180f) diff -= 360f
+        if (diff < -180f) diff += 360f
+        return diff
+    }
+
     override fun onLocationChanged(location: Location) {
         updateBearing(location)
         myLocation = LatLng(location.latitude, location.longitude)
-        mySpeedMps = if (location.hasSpeed()) location.speed else null
-        val pursuit = PursuitForegroundService.state.value
+        mySpeedMps = if (location.hasSpeed()) location.speed else mySpeedMps
+        updateFusedBearing()
         updateMyMarker()
         updateUserSpeedUi()
 
         if (followCamera) {
+            val pursuit = PursuitForegroundService.state.value
             val target = displayedMyLocation(pursuit) ?: LatLng(location.latitude, location.longitude)
             if (pursuit.isActive) {
                 animateToPursuitCamera(target, pursuit)
             } else {
-                mapLibreMap?.let { map ->
-                    val cam = CameraPosition.Builder(map.cameraPosition)
-                        .target(target)
-                        .zoom(max(map.cameraPosition.zoom, 16.0))
-                        .tilt(0.0)
-                        .build()
-                    map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
-                }
+                // Visualización normal: no forzar cámara continuamente salvo que el usuario haya centrado;
+                // se mantiene la vista y se actualiza marcador.
             }
         }
     }
 
     private fun updateBearing(location: Location) {
-        if (location.hasBearing()) {
-            userBearing = location.bearing
+        if (location.hasBearing() && (location.speed >= 1.0f || location.hasSpeed())) {
+            gpsBearing = normalizeBearing(location.bearing)
         } else {
             val prev = lastFix
-            if (prev != null && prev.distanceTo(location) > 1f) {
-                userBearing = prev.bearingTo(location)
+            if (prev != null) {
+                val d = prev.distanceTo(location)
+                if (d > 1.5f) {
+                    gpsBearing = normalizeBearing(prev.bearingTo(location))
+                }
             }
         }
         lastFix = location
     }
-
     private fun displayedMyLocation(info: PursuitInfo = PursuitForegroundService.state.value): LatLng? {
         val real = myLocation ?: return null
         val useSnap = info.isActive && (info.profile == TravelProfile.CAR || info.profile == TravelProfile.MOTORCYCLE)
@@ -406,21 +556,120 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return LatLng(snapped.first, snapped.second)
     }
 
-    private fun pursuitCameraTilt(info: PursuitInfo = PursuitForegroundService.state.value): Double =
-        if (info.isActive) 50.0 else 0.0
+    private fun pursuitCameraTilt(info: PursuitInfo): Double = if (info.isActive) 55.0 else 0.0
+
+    private fun applyPursuitPadding(active: Boolean) {
+        val map = mapLibreMap ?: return
+        if (active) {
+            val h = binding.map.height.coerceAtLeast(1)
+            val bottom = (h * 0.30f).roundToInt()
+            val top = (h * 0.10f).roundToInt()
+            map.setPadding(0, top, 0, bottom)
+        } else {
+            map.setPadding(0, 0, 0, 0)
+        }
+    }
+
+    private fun targetZoomForSpeed(info: PursuitInfo): Double {
+        val speed = (mySpeedMps ?: 0f).toDouble().coerceAtLeast(0.0)
+        val zoom = when (info.profile) {
+            TravelProfile.WALKING -> {
+                val t = (speed / 2.2).coerceIn(0.0, 1.0)
+                18.8 - (1.2 * t)
+            }
+            TravelProfile.MOTORCYCLE, TravelProfile.CAR -> {
+                val maxSpeed = if (info.profile == TravelProfile.MOTORCYCLE) 28.0 else 33.0
+                val t = (speed / maxSpeed).coerceIn(0.0, 1.0)
+                18.4 - (3.0 * t)
+            }
+        }
+        val prev = lastSmoothedZoom ?: zoom
+        val smoothed = prev + (zoom - prev) * 0.20
+        lastSmoothedZoom = smoothed
+        return smoothed.coerceIn(14.5, 19.2)
+    }
 
     private fun animateToPursuitCamera(target: LatLng, info: PursuitInfo = PursuitForegroundService.state.value) {
         val map = mapLibreMap ?: return
-        val zoom = max(map.cameraPosition.zoom, 17.0)
+        applyPursuitPadding(info.isActive)
         val builder = CameraPosition.Builder(map.cameraPosition)
             .target(target)
-            .zoom(zoom)
+            .zoom(targetZoomForSpeed(info))
         if (info.isActive) {
-            builder.bearing(userBearing.toDouble()).tilt(pursuitCameraTilt(info))
+            builder.bearing(fusedBearing.toDouble()).tilt(pursuitCameraTilt(info))
         } else {
             builder.tilt(0.0)
         }
         map.animateCamera(CameraUpdateFactory.newCameraPosition(builder.build()))
+    }
+
+    private fun recenterCamera() {
+        followCamera = true
+        val info = PursuitForegroundService.state.value
+        val target = displayedMyLocation(info) ?: myLocation
+        if (target != null) {
+            if (info.isActive) animateToPursuitCamera(target, info) else animateToNormalTarget(target, 16.5)
+        } else {
+            Toast.makeText(this, R.string.location_permission_needed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun centerOnMe() {
+        val info = PursuitForegroundService.state.value
+        val me = displayedMyLocation(info) ?: myLocation
+        if (me == null) {
+            Toast.makeText(this, R.string.location_permission_needed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        followCamera = true
+        if (info.isActive) animateToPursuitCamera(me, info) else animateToNormalTarget(me, 17.0)
+    }
+
+    private fun animateToNormalTarget(target: LatLng, zoom: Double) {
+        val map = mapLibreMap ?: return
+        applyPursuitPadding(false)
+        val cam = CameraPosition.Builder(map.cameraPosition)
+            .target(target)
+            .zoom(zoom)
+            .bearing(0.0)
+            .tilt(0.0)
+            .build()
+        map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+    }
+
+    private fun centerOnSelectedDevice(zoomIn: Boolean) {
+        val did = selectedDid
+        val st = did?.let { devices[it] }
+        val pos = st?.position
+        if (pos == null) {
+            Toast.makeText(this, "Selecciona un dispositivo con posición", Toast.LENGTH_SHORT).show()
+            return
+        }
+        followCamera = false
+        val target = LatLng(pos.lat, pos.lng)
+        val zoom = if (zoomIn) 17.5 else 15.5
+        animateToNormalTarget(target, zoom)
+    }
+
+    private fun fitAllDevices(animated: Boolean) {
+        if (PursuitForegroundService.state.value.isActive) return
+        val pts = mutableListOf<LatLng>()
+        devices.values.mapNotNull { it.position }.forEach { pts.add(LatLng(it.lat, it.lng)) }
+        myLocation?.let { pts.add(it) }
+        val map = mapLibreMap ?: return
+        if (pts.isEmpty()) return
+        applyPursuitPadding(false)
+        try {
+            if (pts.size == 1) {
+                val cu = CameraUpdateFactory.newLatLngZoom(pts[0], 16.0)
+                if (animated) map.animateCamera(cu) else map.moveCamera(cu)
+            } else {
+                val b = LatLngBounds.Builder()
+                pts.forEach { b.include(it) }
+                val cu = CameraUpdateFactory.newLatLngBounds(b.build(), 80)
+                if (animated) map.animateCamera(cu) else map.moveCamera(cu)
+            }
+        } catch (_: Exception) { }
     }
 
     private fun updateMyMarker() {
@@ -432,28 +681,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             emptyArray()
         }
         style.getSourceAs<GeoJsonSource>(SRC_ME)?.setGeoJson(FeatureCollection.fromFeatures(features))
-    }
-
-    private fun centerOnMe() {
-        val map = mapLibreMap
-        val info = PursuitForegroundService.state.value
-        val me = displayedMyLocation(info)
-        if (me != null && map != null) {
-            followCamera = true
-            val zoom = if (map.cameraPosition.zoom < 16.0) 16.0 else map.cameraPosition.zoom
-            if (info.isActive) {
-                animateToPursuitCamera(me, info)
-            } else {
-                val cam = CameraPosition.Builder(map.cameraPosition)
-                    .target(me)
-                    .zoom(zoom)
-                    .tilt(0.0)
-                    .build()
-                map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
-            }
-        } else {
-            Toast.makeText(this, R.string.location_permission_needed, Toast.LENGTH_SHORT).show()
-        }
     }
 
     private fun restartRefreshLoop() {
@@ -480,6 +707,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             }
             result.onSuccess { states ->
                 devices = states
+                refreshDeviceDropdown()
                 updateDeviceMarkers()
                 val total = states.size
                 val withPos = states.values.count { it.position != null }
@@ -500,11 +728,22 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (first != null) selectDevice(first.info.did)
     }
 
-    private fun selectDevice(did: String) {
+    private fun selectDevice(did: String, fromDropdown: Boolean = false) {
         selectedDid = did
         val st = devices[did] ?: return
         binding.routeText.text = selectedSummary(did)
+        refreshDeviceDropdown()
         updateDeviceMarkers()
+        if (!fromDropdown) {
+            // mantener sincronizado el desplegable
+            val entries = currentDeviceEntries()
+            val label = entries.firstOrNull { it.did == did }?.label
+            if (label != null) {
+                suppressDeviceSelectionCallback = true
+                binding.deviceSelector.setText(label, false)
+                suppressDeviceSelectionCallback = false
+            }
+        }
     }
 
     private fun selectedSummary(did: String? = selectedDid): String {
@@ -540,24 +779,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             if (summary.isNotBlank()) binding.routeText.text = summary
         }
 
-        if (!fitDone) {
-            val pts = mutableListOf<LatLng>()
-            devices.values.mapNotNull { it.position }.forEach { pts.add(LatLng(it.lat, it.lng)) }
-            myLocation?.let { pts.add(it) }
-            val map = mapLibreMap
-            if (map != null) {
-                if (pts.size == 1) {
-                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(pts[0], 16.0))
-                    fitDone = true
-                } else if (pts.size > 1) {
-                    try {
-                        val b = LatLngBounds.Builder()
-                        pts.forEach { b.include(it) }
-                        map.animateCamera(CameraUpdateFactory.newLatLngBounds(b.build(), 80))
-                        fitDone = true
-                    } catch (_: Exception) { }
-                }
-            }
+        if (!fitDone && !PursuitForegroundService.state.value.isActive) {
+            fitAllDevices(animated = false)
+            if (devices.values.any { it.position != null }) fitDone = true
         }
     }
 
@@ -633,12 +857,13 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         ensureNotificationPermission()
         val profile = PursuitPrefs.travelProfile(this)
         followCamera = true
+        lastSmoothedZoom = null
+        applyPursuitPadding(true)
         PursuitForegroundService.startPursuit(this, did, st.info.name, profile)
         Toast.makeText(this, "Persecución iniciada (${profileLabel(profile)})", Toast.LENGTH_SHORT).show()
     }
 
     private fun confirmStopPursuit() {
-        // Detener persecución: solo acción explícita del usuario (confirmada)
         AlertDialog.Builder(this)
             .setTitle("Detener persecución")
             .setMessage("La persecución solo se detiene manualmente. ¿Deseas detenerla ahora?")
@@ -698,16 +923,16 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val trackerSpeed = info.trackerPosition?.speed ?: info.lastKnownTrackerPosition?.speed
         binding.trackerSpeedText.text = "Vel. tracker: " + (trackerSpeed?.let { formatSpeed(it) } ?: "-")
 
-        val heading = info.trackerPosition?.heading ?: info.lastKnownTrackerPosition?.heading
-        binding.trackerHeadingText.text = "Rumbo: " + (heading?.let { "${it.roundToInt()}°" } ?: "-")
+        val trackerHeading = info.trackerPosition?.heading ?: info.lastKnownTrackerPosition?.heading
+        binding.trackerHeadingText.text = "Rumbo: " + (trackerHeading?.let { "${it.roundToInt()}°" } ?: "-")
 
-        // Próxima maniobra / instrucción
         val nextStep = info.route?.steps?.firstOrNull()
         if (active) {
             binding.nextManeuverText.text = when {
                 info.state == PursuitState.WAITING_FOR_TRACKER -> "Esperando posición del tracker…"
                 info.state == PursuitState.TRACKER_SIGNAL_LOST -> "Sin señal: última posición conservada"
                 info.state == PursuitState.CALCULATING_ROUTE -> "Calculando ruta…"
+                info.profile == TravelProfile.WALKING -> "Línea directa al destino"
                 nextStep != null -> nextStep.instruction
                 info.state == PursuitState.TRACKER_NEARBY -> "Cerca del tracker (persecución activa)"
                 info.state == PursuitState.TRACKER_STATIONARY -> "Tracker detenido (persecución activa)"
@@ -716,13 +941,17 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             val maneuverDist = nextStep?.distanceMeters
             binding.navInstructionText.visibility = View.VISIBLE
             binding.navInstructionText.text = buildString {
-                if (nextStep != null) {
+                if (info.profile == TravelProfile.WALKING) {
+                    append("A pie: línea recta en tiempo real al destino")
+                } else if (nextStep != null) {
                     append("Próxima maniobra: ${GeoUtils.formatDistanceMeters(nextStep.distanceMeters)}")
                 } else {
                     append("Sin instrucciones de ruta")
                 }
-                append(" · Dist. maniobra: ")
-                append(maneuverDist?.let { GeoUtils.formatDistanceMeters(it) } ?: "-")
+                if (info.profile != TravelProfile.WALKING) {
+                    append(" · Dist. maniobra: ")
+                    append(maneuverDist?.let { GeoUtils.formatDistanceMeters(it) } ?: "-")
+                }
             }
         } else {
             if (info.state == PursuitState.STOPPED) {
@@ -734,37 +963,56 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             }
         }
 
-        // Ruta en mapa: preferir ruta del controlador de persecución
-        val route = info.route
+        // Render de ruta según perfil
         val me = displayedMyLocation(info) ?: myLocation
-        if (info.isActive && route != null) {
-            val pts = route.geometry.map { LatLng(it.first, it.second) }
-            val walking = info.profile == TravelProfile.WALKING
-            updateRouteLayer(
-                pts,
-                dashed = walking,
-                color = if (walking) "#0EA5E9" else "#16A34A",
-                dotted = walking,
-            )
-        } else if (info.isActive && info.lastKnownTrackerPosition != null && me != null) {
-            // sin ruta válida: línea directa (indicativa)
-            val t = info.lastKnownTrackerPosition!!
-            updateRouteLayer(listOf(me, LatLng(t.latitude, t.longitude)), dashed = true, color = "#F59E0B")
+        val trackerPos = info.trackerPosition ?: info.lastKnownTrackerPosition
+        clearFootLayer()
+        if (info.isActive && trackerPos != null && me != null) {
+            when (info.profile) {
+                TravelProfile.WALKING -> {
+                    // Siempre línea recta directa al destino, en tiempo real
+                    val pts = listOf(me, LatLng(trackerPos.latitude, trackerPos.longitude))
+                    updateRouteLayer(pts, dashed = true, color = "#0EA5E9", dotted = true)
+                    binding.routeDistanceText.text = "Ruta: directa"
+                }
+                TravelProfile.CAR, TravelProfile.MOTORCYCLE -> {
+                    val route = info.route
+                    if (route != null && route.geometry.size >= 2) {
+                        val pts = route.geometry.map { LatLng(it.first, it.second) }
+                        updateRouteLayer(pts, dashed = false, color = "#16A34A", dotted = false)
+                        val end = route.geometry.last()
+                        val footMeters = GeoUtils.haversineMeters(end.first, end.second, trackerPos.latitude, trackerPos.longitude)
+                        if (footMeters > FOOT_THRESHOLD_METERS) {
+                            setFootLayer(listOf(LatLng(end.first, end.second), LatLng(trackerPos.latitude, trackerPos.longitude)))
+                            binding.navInstructionText.visibility = View.VISIBLE
+                            val existing = binding.navInstructionText.text.toString()
+                            binding.navInstructionText.text = "$existing · A pie desde fin de carretera: ${GeoUtils.formatDistanceMeters(footMeters)}"
+                        }
+                    } else {
+                        // Sin ruta: línea directa indicativa hasta que OSRM responda
+                        val pts = listOf(me, LatLng(trackerPos.latitude, trackerPos.longitude))
+                        updateRouteLayer(pts, dashed = true, color = "#F59E0B", dotted = false)
+                    }
+                }
+            }
         } else if (!info.isActive) {
             if (info.state == PursuitState.STOPPED) {
                 // mantener última visualización simple
+            } else {
+                clearFootLayer()
+                // en visualización normal no mostramos ruta de persecución
             }
         }
 
         if (info.isActive) {
             binding.routeText.text = "Objetivo: $name · ${profileLabel(info.profile)} · ${stateLabel(info.state)}"
-            // Asegurar que el objetivo de persecución esté seleccionado
-            info.trackerId?.let { if (selectedDid != it) selectedDid = it }
+            info.trackerId?.let { if (selectedDid != it) selectDevice(it) }
         }
 
         val wasActive = lastPursuitState?.let { it != PursuitState.IDLE && it != PursuitState.STOPPED } == true
         if (wasActive && !info.isActive) {
-            // Salir de modo persecución: volver a vista cenital (plano normal)
+            applyPursuitPadding(false)
+            lastSmoothedZoom = null
             mapLibreMap?.let { map ->
                 val target = myLocation ?: map.cameraPosition.target
                 val cam = CameraPosition.Builder(map.cameraPosition)
@@ -774,6 +1022,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     .build()
                 map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
             }
+            fitAllDevices(animated = true)
         }
 
         updateLastUpdateAge(info)
@@ -821,7 +1070,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun formatSpeed(speed: Double): String {
-        // Heurística: si parece m/s (<60) convertir a km/h; si ya parece km/h, mostrar tal cual.
         val kmh = if (speed <= 60.0) speed * 3.6 else speed
         return String.format(Locale.getDefault(), "%.1f km/h", kmh)
     }
@@ -840,11 +1088,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         } else {
             source.setGeoJson(FeatureCollection.fromFeatures(emptyArray()))
         }
-
         if (style.getLayer(LAYER_ROUTE) != null) style.removeLayer(LAYER_ROUTE)
         val builder = LineLayer(LAYER_ROUTE, SRC_ROUTE).withProperties(
             PropertyFactory.lineColor(Color.parseColor(color)),
-            PropertyFactory.lineWidth(if (dashed) 4f else 5f),
+            PropertyFactory.lineWidth(if (dashed || dotted) 4f else 5f),
             PropertyFactory.lineCap(Property.LINE_CAP_ROUND),
             PropertyFactory.lineJoin(Property.LINE_JOIN_ROUND)
         )
@@ -852,7 +1099,29 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             dotted -> builder.withProperties(PropertyFactory.lineDasharray(arrayOf(1f, 2f)))
             dashed -> builder.withProperties(PropertyFactory.lineDasharray(arrayOf(2f, 1.5f)))
         }
-        if (style.getLayer(LAYER_DEVICES) != null) style.addLayerBelow(builder, LAYER_DEVICES) else style.addLayer(builder)
+        if (style.getLayer(LAYER_FOOT) != null) {
+            style.addLayerBelow(builder, LAYER_FOOT)
+        } else if (style.getLayer(LAYER_DEVICES) != null) {
+            style.addLayerBelow(builder, LAYER_DEVICES)
+        } else {
+            style.addLayer(builder)
+        }
+    }
+
+    private fun setFootLayer(points: List<LatLng>) {
+        val style = mapStyle ?: return
+        val source = style.getSourceAs<GeoJsonSource>(SRC_FOOT) ?: return
+        if (points.size >= 2) {
+            val coords = points.map { Point.fromLngLat(it.longitude, it.latitude) }
+            source.setGeoJson(LineString.fromLngLats(coords))
+        } else {
+            source.setGeoJson(FeatureCollection.fromFeatures(emptyArray()))
+        }
+    }
+
+    private fun clearFootLayer() {
+        val style = mapStyle ?: return
+        style.getSourceAs<GeoJsonSource>(SRC_FOOT)?.setGeoJson(FeatureCollection.fromFeatures(emptyArray()))
     }
 
     // ---- Seguimiento externo en Google Maps (conservado) ----
@@ -866,9 +1135,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (did == null || st?.position == null) {
             Toast.makeText(this, "Selecciona un reloj con posición", Toast.LENGTH_SHORT).show()
             return
-        }
-        if (PursuitForegroundService.state.value.isActive) {
-            // permitir coexistencia lógica no simultánea confusa: se puede mantener, pero avisamos
         }
         externalFollowing = true
         binding.followExternalButton.text = getString(R.string.stop_follow_external)
@@ -894,7 +1160,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         if (showToast) Toast.makeText(this, R.string.external_follow_stopped, Toast.LENGTH_SHORT).show()
     }
 
-    // ---- TTS local (heredado; la voz principal de persecución vive en el servicio) ----
     private fun speak(text: String) {
         if (!ttsReady) return
         try { tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "navstep") } catch (_: Exception) {}
@@ -905,8 +1170,17 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     override fun onStart() { super.onStart(); binding.map.onStart() }
-    override fun onResume() { super.onResume(); binding.map.onResume(); updateVoiceButton() }
-    override fun onPause() { binding.map.onPause(); super.onPause() }
+    override fun onResume() {
+        super.onResume()
+        binding.map.onResume()
+        updateVoiceButton()
+        startSensorUpdates()
+    }
+    override fun onPause() {
+        stopSensorUpdates()
+        binding.map.onPause()
+        super.onPause()
+    }
     override fun onStop() { binding.map.onStop(); super.onStop() }
     override fun onSaveInstanceState(outState: Bundle) { super.onSaveInstanceState(outState); binding.map.onSaveInstanceState(outState) }
     override fun onLowMemory() { super.onLowMemory(); binding.map.onLowMemory() }
@@ -914,8 +1188,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     override fun onDestroy() {
         refreshJob?.cancel()
         uiTickJob?.cancel()
-        routeJob?.cancel()
-        followJob?.cancel()
+        stopSensorUpdates()
         try { (getSystemService(Context.LOCATION_SERVICE) as LocationManager).removeUpdates(this) } catch (_: Exception) {}
         try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
         binding.map.onDestroy()
