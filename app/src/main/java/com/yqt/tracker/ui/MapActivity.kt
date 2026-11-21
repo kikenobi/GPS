@@ -165,6 +165,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     updateNavOverlay()
                 }
             }
+            map.addOnCameraMoveListener { updateZoomIndicator() }
             map.setStyle(Style.Builder().fromUri(STYLE_URL)) { style ->
                 mapStyle = style
                 setupMapLayers(style)
@@ -180,6 +181,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 updateMyMarker()
                 updateDeviceMarkers()
                 updateRouteLayer()
+                updateZoomIndicator()
             }
         }
 
@@ -500,7 +502,31 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val speed = mySpeedMps ?: 0f
         val gps = gpsBearing
         val sensor = sensorBearing
+        val info = PursuitForegroundService.state.value
+        val walkingPursuit = info.isActive && info.profile == TravelProfile.WALKING
+        val motorizedPursuit = info.isActive && (info.profile == TravelProfile.CAR || info.profile == TravelProfile.MOTORCYCLE)
+
         val target = when {
+            // Caminando: brújula/sensor tiene prioridad; GPS solo como apoyo si hay movimiento claro.
+            walkingPursuit -> when {
+                sensor != null && speed < 1.2f -> sensor
+                gps != null && speed >= 1.2f && sensor != null -> {
+                    val t = ((speed - 1.2f) / 1.0f).coerceIn(0f, 1f)
+                    val diff = bearingDelta(sensor, gps)
+                    normalizeBearing(sensor + diff * t)
+                }
+                sensor != null -> sensor
+                gps != null -> gps
+                else -> fusedBearing
+            }
+            // Coche/moto: dirección de avance siempre adelante; mapa gira según rumbo de marcha.
+            motorizedPursuit -> when {
+                gps != null && speed >= 0.8f -> gps
+                gps != null -> gps // mantener rumbo de marcha, evita giros por brújula en vehículo
+                sensor != null -> sensor
+                else -> fusedBearing
+            }
+            // Fuera de persecución: comportamiento general.
             gps != null && speed >= 1.5f -> gps
             sensor != null && speed < 1.5f -> sensor
             gps != null && sensor != null -> {
@@ -512,7 +538,13 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             sensor != null -> sensor
             else -> fusedBearing
         }
-        fusedBearing = smoothBearing(fusedBearing, target, if (speed >= 1.5f) 0.25f else 0.18f)
+        val alpha = when {
+            walkingPursuit -> 0.18f
+            motorizedPursuit -> if (speed >= 1.0f) 0.28f else 0.12f
+            speed >= 1.5f -> 0.25f
+            else -> 0.18f
+        }
+        fusedBearing = smoothBearing(fusedBearing, target, alpha)
     }
 
     private fun bearingDelta(from: Float, to: Float): Float {
@@ -610,6 +642,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             builder.tilt(0.0)
         }
         map.animateCamera(CameraUpdateFactory.newCameraPosition(builder.build()))
+        updateZoomIndicator(builder.build().zoom)
+    }
+
+    private fun updateZoomIndicator(zoomOverride: Double? = null) {
+        val map = mapLibreMap ?: return
+        val zoom = zoomOverride ?: map.cameraPosition.zoom
+        val pct = (((zoom - 10.0) / (20.0 - 10.0)) * 100.0).coerceIn(0.0, 100.0)
+        binding.zoomIndicatorText.text = String.format(Locale.getDefault(), "Zoom: %.2f (%.0f%%)", zoom, pct)
     }
 
     private fun recenterCamera() {
@@ -646,6 +686,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             .tilt(0.0)
             .build()
         map.animateCamera(CameraUpdateFactory.newCameraPosition(cam))
+        updateZoomIndicator(cam.zoom)
     }
 
     private fun centerOnSelectedDevice(zoomIn: Boolean) {
