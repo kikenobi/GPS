@@ -187,7 +187,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
             if (suppressDeviceSelectionCallback) return@setOnItemClickListener
             val entries = currentDeviceEntries()
             val entry = entries.getOrNull(position) ?: return@setOnItemClickListener
-            selectDevice(entry.first, fromDropdown = true)
+            selectDevice(entry.did, fromDropdown = true)
         }
     }
 
