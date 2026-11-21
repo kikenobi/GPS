@@ -978,6 +978,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.recenterNavButton.visibility = if (show) View.VISIBLE else View.GONE
     }
 
+    private fun updateKeepScreenOn(active: Boolean) {
+        if (active) {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     private fun renderPursuitInfo(info: PursuitInfo) {
         val active = info.isActive
         val name = PursuitForegroundService.trackerName.value.ifBlank { info.trackerId ?: selectedDid?.let { devices[it]?.info?.name } ?: "Tracker" }
@@ -1102,6 +1110,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         updateMyMarker()
         updatePursuitToggleButton(info)
         updateNavOverlay()
+        updateKeepScreenOn(info.isActive)
         if (info.isActive && followCamera) {
             val target = displayedMyLocation(info)
             if (target != null) animateToPursuitCamera(target, info)
