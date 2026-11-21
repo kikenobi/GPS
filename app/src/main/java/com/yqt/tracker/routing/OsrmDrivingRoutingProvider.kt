@@ -9,7 +9,6 @@ import kotlinx.coroutines.withContext
  * Proveedor provisional basado en OSRM público, desacoplado de OSRM en la interfaz del controlador.
  * - Coche: driving
  * - Caminando: walking
- * - Moto: provisionalmente driving (OSRM público no expone perfil moto nativo); pendiente motor/perfil específico.
  */
 class OsrmRoutingProvider(
     private val fetcher: (Double, Double, Double, Double, String) -> RouteInfo? =
@@ -21,7 +20,6 @@ class OsrmRoutingProvider(
     fun osrmProfileFor(profile: TravelProfile): String = when (profile) {
         TravelProfile.CAR -> "driving"
         TravelProfile.WALKING -> "walking"
-        TravelProfile.MOTORCYCLE -> "driving" // provisional
     }
 
     override suspend fun calculateRoute(request: RouteRequest): RouteResult = withContext(Dispatchers.IO) {

@@ -297,7 +297,8 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     PropertyFactory.iconImage(IMG_ME),
                     PropertyFactory.iconAllowOverlap(true),
                     PropertyFactory.iconIgnorePlacement(true),
-                    PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER)
+                    PropertyFactory.iconAnchor(Property.ICON_ANCHOR_CENTER),
+                    PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_VIEWPORT)
                 )
             )
         }
@@ -504,7 +505,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val sensor = sensorBearing
         val info = PursuitForegroundService.state.value
         val walkingPursuit = info.isActive && info.profile == TravelProfile.WALKING
-        val motorizedPursuit = info.isActive && (info.profile == TravelProfile.CAR || info.profile == TravelProfile.MOTORCYCLE)
+        val carPursuit = info.isActive && info.profile == TravelProfile.CAR
 
         val target = when {
             // Caminando: brújula/sensor tiene prioridad; GPS solo como apoyo si hay movimiento claro.
@@ -519,9 +520,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 gps != null -> gps
                 else -> fusedBearing
             }
-            // Coche/moto: dirección de avance siempre adelante; mapa gira según rumbo de marcha.
-            // Nunca usar brújula del móvil en vehículo (aunque el móvil gire).
-            motorizedPursuit -> when {
+            // Coche (TRACK UP): dirección de avance siempre arriba; el mapa rota según rumbo GPS.
+            // Nunca usar brújula del móvil en coche (aunque el móvil gire).
+            carPursuit -> when {
                 gps != null -> gps
                 else -> fusedBearing
             }
@@ -539,7 +540,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
         val alpha = when {
             walkingPursuit -> 0.18f
-            motorizedPursuit -> if (speed >= 1.0f) 0.28f else 0.12f
+            carPursuit -> if (speed >= 1.0f) 0.28f else 0.12f
             speed >= 1.5f -> 0.25f
             else -> 0.18f
         }
@@ -589,7 +590,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
     private fun displayedMyLocation(info: PursuitInfo = PursuitForegroundService.state.value): LatLng? {
         val real = myLocation ?: return null
-        val useSnap = info.isActive && (info.profile == TravelProfile.CAR || info.profile == TravelProfile.MOTORCYCLE)
+        val useSnap = info.isActive && info.profile == TravelProfile.CAR
         if (!useSnap) return real
         val route = info.route ?: return real
         val snapped = GeoUtils.nearestPointOnPolyline(real.latitude, real.longitude, route.geometry) ?: return real
@@ -618,7 +619,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 val t = (speed / 2.0).coerceIn(0.0, 1.0)
                 20.0 - (1.5 * t) // 20.0 lento -> 18.5 rápido
             }
-            TravelProfile.MOTORCYCLE, TravelProfile.CAR -> {
+            TravelProfile.CAR -> {
                 // Parado/lento -> 20.0, rápido -> 18.0
                 val fastSpeed = 13.9 // ~50 km/h
                 val t = (speed / fastSpeed).coerceIn(0.0, 1.0)
@@ -941,8 +942,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun cycleTravelProfile() {
         val next = when (PursuitPrefs.travelProfile(this)) {
-            TravelProfile.CAR -> TravelProfile.MOTORCYCLE
-            TravelProfile.MOTORCYCLE -> TravelProfile.WALKING
+            TravelProfile.CAR -> TravelProfile.WALKING
             TravelProfile.WALKING -> TravelProfile.CAR
         }
         PursuitPrefs.setTravelProfile(this, next)
@@ -954,7 +954,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun profileLabel(p: TravelProfile): String = when (p) {
         TravelProfile.CAR -> "Coche"
-        TravelProfile.MOTORCYCLE -> "Moto"
         TravelProfile.WALKING -> "Caminando"
     }
 
@@ -1049,7 +1048,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                     updateRouteLayer(pts, dashed = true, color = "#0EA5E9", dotted = true)
                     binding.routeDistanceText.text = "Ruta: directa"
                 }
-                TravelProfile.CAR, TravelProfile.MOTORCYCLE -> {
+                TravelProfile.CAR -> {
                     val route = info.route
                     if (route != null && route.geometry.size >= 2) {
                         val pts = route.geometry.map { LatLng(it.first, it.second) }

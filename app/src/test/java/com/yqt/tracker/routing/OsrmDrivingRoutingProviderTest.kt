@@ -9,7 +9,7 @@ import org.junit.Test
 class OsrmDrivingRoutingProviderTest {
 
     @Test
-    fun `mapea perfiles a OSRM provisional y soporta los tres sin depender de red`() = runTest {
+    fun `mapea perfiles a OSRM provisional y soporta coche y caminando sin depender de red`() = runTest {
         val calls = mutableListOf<String>()
         val fakeRoute = RouteInfo(
             geometry = listOf(Pair(40.0, -3.0), Pair(40.1, -3.1)),
@@ -24,21 +24,18 @@ class OsrmDrivingRoutingProviderTest {
         val req = RouteRequest(GeoPoint(40.0, -3.0), GeoPoint(40.1, -3.1), TravelProfile.CAR)
 
         val car = provider.calculateRoute(req.copy(profile = TravelProfile.CAR))
-        val moto = provider.calculateRoute(req.copy(profile = TravelProfile.MOTORCYCLE))
         val walk = provider.calculateRoute(req.copy(profile = TravelProfile.WALKING))
 
         assertTrue(car is RouteResult.Success)
-        assertTrue(moto is RouteResult.Success)
         assertTrue(walk is RouteResult.Success)
-        assertEquals(listOf("driving", "driving", "walking"), calls)
+        assertEquals(listOf("driving", "walking"), calls)
     }
 
     @Test
-    fun `arquitectura expone los tres perfiles de desplazamiento`() {
+    fun `arquitectura expone perfiles coche y caminando`() {
         val profiles = TravelProfile.entries.map { it.name }.toSet()
         assertTrue(profiles.contains("CAR"))
-        assertTrue(profiles.contains("MOTORCYCLE"))
         assertTrue(profiles.contains("WALKING"))
-        assertEquals(3, profiles.size)
+        assertEquals(2, profiles.size)
     }
 }
