@@ -167,29 +167,6 @@
                 android:layout_marginTop="8dp"
                 android:minWidth="0dp"
                 android:text="3D" />
-
-            <TextView
-                android:id="@+id/pitchValueText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:background="#AA111827"
-                android:paddingStart="6dp"
-                android:paddingEnd="6dp"
-                android:paddingTop="2dp"
-                android:paddingBottom="2dp"
-                android:text="Pitch: 62°"
-                android:textColor="#FFFFFF"
-                android:textSize="11sp" />
-
-            <com.google.android.material.slider.Slider
-                android:id="@+id/pitchSlider"
-                android:layout_width="140dp"
-                android:layout_height="wrap_content"
-                android:valueFrom="30"
-                android:valueTo="70"
-                android:stepSize="1"
-                android:value="62" />
         </LinearLayout>
 
         <com.google.android.material.button.MaterialButton

@@ -98,7 +98,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private var suppressDeviceSelectionCallback = false
     private var lastCameraUpdateAt = 0L
     private var pursuit3DMode = true
-    private var pursuit3DPitch = 62f
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
@@ -154,18 +153,6 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.profileButton.setOnClickListener { cycleTravelProfile() }
         binding.voiceToggleButton.setOnClickListener { toggleVoice() }
         binding.viewModeButton.setOnClickListener { toggleViewMode() }
-        binding.pitchSlider.addOnChangeListener { _, value, fromUser ->
-            if (!fromUser) return@addOnChangeListener
-            pursuit3DPitch = value
-            binding.pitchValueText.text = String.format(Locale.getDefault(), "Pitch: %.0f°", value)
-            val info = PursuitForegroundService.state.value
-            val target = displayedMyLocation(info) ?: myLocation ?: mapLibreMap?.cameraPosition?.target
-            if (target != null && info.isActive) {
-                animateToPursuitCamera(target, info)
-            }
-        }
-        binding.pitchSlider.value = pursuit3DPitch
-        binding.pitchValueText.text = String.format(Locale.getDefault(), "Pitch: %.0f°", pursuit3DPitch)
         updateVoiceButton()
         updateViewModeButton()
         updatePursuitToggleButton(PursuitForegroundService.state.value)
@@ -568,7 +555,11 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         }
         val alpha = when {
             walkingPursuit -> 0.18f
-            carPursuit -> if (speed >= 1.0f) 0.28f else 0.12f
+            carPursuit -> when {
+                routeBearingAhead(info) != null -> 0.30f
+                speed >= 1.0f -> 0.28f
+                else -> 0.14f
+            }
             speed >= 1.5f -> 0.25f
             else -> 0.18f
         }
@@ -649,8 +640,11 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return LatLng(snapped.first, snapped.second)
     }
 
-    private fun pursuitCameraTilt(info: PursuitInfo): Double =
-        if (info.isActive && pursuit3DMode) pursuit3DPitch.toDouble() else 0.0
+    private fun pursuitCameraTilt(info: PursuitInfo): Double {
+        if (!info.isActive || !pursuit3DMode) return 0.0
+        val maxPitch = mapLibreMap?.maxPitch ?: 60.0
+        return maxPitch.coerceAtMost(60.0)
+    }
 
     private fun applyPursuitPadding(active: Boolean) {
         val map = mapLibreMap ?: return
@@ -713,14 +707,19 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
 
     private fun animateToPursuitCamera(target: LatLng, info: PursuitInfo = PursuitForegroundService.state.value) {
         val map = mapLibreMap ?: return
-        applyPursuitPadding(info.isActive)
+        if (info.isActive) {
+            updateFusedBearing()
+            applyPursuitPadding(true)
+        } else {
+            applyPursuitPadding(false)
+        }
         val builder = CameraPosition.Builder(map.cameraPosition)
             .target(target)
-            .zoom(targetZoomForSpeed(info))
+            .zoom(if (info.isActive) targetZoomForSpeed(info) else max(map.cameraPosition.zoom, 16.0))
         if (info.isActive) {
             builder.bearing(fusedBearing.toDouble()).tilt(pursuitCameraTilt(info))
         } else {
-            builder.tilt(0.0)
+            builder.tilt(0.0).bearing(0.0)
         }
         map.animateCamera(CameraUpdateFactory.newCameraPosition(builder.build()))
         updateZoomIndicator(builder.build().zoom)
@@ -1194,7 +1193,10 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         updateKeepScreenOn(info.isActive)
         if (info.isActive && followCamera) {
             val target = displayedMyLocation(info)
-            if (target != null) animateToPursuitCamera(target, info)
+            if (target != null) {
+                updateFusedBearing()
+                animateToPursuitCamera(target, info)
+            }
         }
         lastPursuitState = info.state
     }
