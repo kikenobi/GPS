@@ -520,10 +520,9 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 else -> fusedBearing
             }
             // Coche/moto: dirección de avance siempre adelante; mapa gira según rumbo de marcha.
+            // Nunca usar brújula del móvil en vehículo (aunque el móvil gire).
             motorizedPursuit -> when {
-                gps != null && speed >= 0.8f -> gps
-                gps != null -> gps // mantener rumbo de marcha, evita giros por brújula en vehículo
-                sensor != null -> sensor
+                gps != null -> gps
                 else -> fusedBearing
             }
             // Fuera de persecución: comportamiento general.
@@ -615,19 +614,21 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         val speed = (mySpeedMps ?: 0f).toDouble().coerceAtLeast(0.0)
         val zoom = when (info.profile) {
             TravelProfile.WALKING -> {
-                val t = (speed / 2.2).coerceIn(0.0, 1.0)
-                18.8 - (1.2 * t)
+                // Parado/lento -> más cerca; rápido -> algo más lejos
+                val t = (speed / 2.0).coerceIn(0.0, 1.0)
+                20.0 - (1.5 * t) // 20.0 lento -> 18.5 rápido
             }
             TravelProfile.MOTORCYCLE, TravelProfile.CAR -> {
-                val maxSpeed = if (info.profile == TravelProfile.MOTORCYCLE) 28.0 else 33.0
-                val t = (speed / maxSpeed).coerceIn(0.0, 1.0)
-                18.4 - (3.0 * t)
+                // Parado/lento -> 20.0, rápido -> 18.0
+                val fastSpeed = 13.9 // ~50 km/h
+                val t = (speed / fastSpeed).coerceIn(0.0, 1.0)
+                20.0 - (2.0 * t)
             }
         }
         val prev = lastSmoothedZoom ?: zoom
         val smoothed = prev + (zoom - prev) * 0.20
         lastSmoothedZoom = smoothed
-        return smoothed.coerceIn(14.5, 19.2)
+        return smoothed.coerceIn(16.0, 20.5)
     }
 
     private fun animateToPursuitCamera(target: LatLng, info: PursuitInfo = PursuitForegroundService.state.value) {
