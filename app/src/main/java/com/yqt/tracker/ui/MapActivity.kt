@@ -98,6 +98,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     private var suppressDeviceSelectionCallback = false
     private var lastCameraUpdateAt = 0L
     private var pursuit3DMode = true
+    private var pursuit3DPitch = 62f
 
     private val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     private val REQ_LOC = 1001
@@ -153,6 +154,18 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         binding.profileButton.setOnClickListener { cycleTravelProfile() }
         binding.voiceToggleButton.setOnClickListener { toggleVoice() }
         binding.viewModeButton.setOnClickListener { toggleViewMode() }
+        binding.pitchSlider.addOnChangeListener { _, value, fromUser ->
+            if (!fromUser) return@addOnChangeListener
+            pursuit3DPitch = value
+            binding.pitchValueText.text = String.format(Locale.getDefault(), "Pitch: %.0f°", value)
+            val info = PursuitForegroundService.state.value
+            val target = displayedMyLocation(info) ?: myLocation ?: mapLibreMap?.cameraPosition?.target
+            if (target != null && info.isActive) {
+                animateToPursuitCamera(target, info)
+            }
+        }
+        binding.pitchSlider.value = pursuit3DPitch
+        binding.pitchValueText.text = String.format(Locale.getDefault(), "Pitch: %.0f°", pursuit3DPitch)
         updateVoiceButton()
         updateViewModeButton()
         updatePursuitToggleButton(PursuitForegroundService.state.value)
@@ -502,6 +515,14 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
         return normalizeBearing(current + diff * alpha)
     }
 
+    private fun routeBearingAhead(info: PursuitInfo): Float? {
+        val route = info.route ?: return null
+        if (route.geometry.size < 2) return null
+        val loc = myLocation ?: return null
+        // Usar posición real para anclar a carretera y mirar unos metros por delante.
+        return GeoUtils.bearingAlongPolylineAhead(loc.latitude, loc.longitude, route.geometry, 30.0)
+    }
+
     private fun updateFusedBearing() {
         val speed = mySpeedMps ?: 0f
         val gps = gpsBearing
@@ -523,11 +544,15 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
                 gps != null -> gps
                 else -> fusedBearing
             }
-            // Coche (TRACK UP): dirección de avance siempre arriba; el mapa rota según rumbo GPS.
+            // Coche (TRACK UP): dirección de avance según carretera/ruta por delante; fallback a GPS.
             // Nunca usar brújula del móvil en coche (aunque el móvil gire).
-            carPursuit -> when {
-                gps != null -> gps
-                else -> fusedBearing
+            carPursuit -> {
+                val routeBearing = routeBearingAhead(info)
+                when {
+                    routeBearing != null -> routeBearing
+                    gps != null -> gps
+                    else -> fusedBearing
+                }
             }
             // Fuera de persecución: comportamiento general.
             gps != null && speed >= 1.5f -> gps
@@ -625,7 +650,7 @@ class MapActivity : AppCompatActivity(), LocationListener, TextToSpeech.OnInitLi
     }
 
     private fun pursuitCameraTilt(info: PursuitInfo): Double =
-        if (info.isActive && pursuit3DMode) 62.0 else 0.0
+        if (info.isActive && pursuit3DMode) pursuit3DPitch.toDouble() else 0.0
 
     private fun applyPursuitPadding(active: Boolean) {
         val map = mapLibreMap ?: return
